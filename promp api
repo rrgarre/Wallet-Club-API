@@ -1,0 +1,66 @@
+creame en esta carpeta una api con express.
+los datos residiran en sql en una base de datos remota que tengo en otro lugar alojada
+(deja preparada una zona en un fichero para las credenciales de base de datos y que las 
+consuma de un .env donde iran las credenciales en texto)
+
+ficheros separados para hablar con la base de datos.
+
+Las entidades de la base de datos:
+
+-admin: id, nombre, passworHash
+
+-comercios: id, nombre, puntosPremio(entero), premioDescripcion, activo, idRandomLargo, passwordHash
+
+-tarjetas: id, comercioId, nombre, email, puntos(entero), premios(entero), passwordHash, activo
+*passwordHash obviamente no es la password plana
+*si es necesario que se creen los createdAt
+*Una consideración importante: el idRandomLargo sirve para identificar el comercio, pero no debería actuar como sustituto de la autenticación. Aunque la URL sea difícil de adivinar, no debe conceder acceso a operaciones privadas.
+
+-operaciones: id, tarjetaId, comercioId, tipo(Acumulación, canje, corrección, etc.), 
+puntosDelta (variacion de puntos +/-), premiosDelta (variacion de premios +/-), 
+descripcion, nombre (identificar camarero o persona que hace la operacion)
+*el campo para el nombre se activará en cliente en caso de manipulación manual de premios, de decrementos de puntos o de incrementos demasiado grandes. Cada "camarero" dispondra de un codigo que lo identifica en la operacion. Si la operacion no cumple todo esto, se considera estandar y el nombre va fijado, no hay que rellenar. Si se requiere nombre será cosa del front el requerirlo.
+
+endpoints
+deben funcionar con JWT y limitar accesos por roles
+
+endpoins publicos:
+-login admin 
+-login comercio 
+-login tarjeta/cliente
+-registro tarjeta/cliente (en la url debe añadirse un parametro que identifica al comercio, la idRandom que creamos en el modelo de comercio) ya que la comercioId debe deducirse en el controlador y este saber para que comercio es esta tarjeta
+--**Ahora los endpoints protegidos por token que identifica al admin, comercio o tarjeta logeada
+
+endpoinst para tarjetas:
+-devuelve los parametros de la tarjeta
+
+endpoints para comercios (si comercio activo=true):
+-devuelve datos de una tarjeta, si la tarjeta pertenece al comercio logeado
+-devuelve tarjetas del comercio
+-incrementar/decrementar puntos y premio de tarjeta (valores enteros)
+*Estos controladores para incrementos deben gestionar que si los puntos supera el valor puntosPremio del comercio, se debe restar tantos puntos como el valor de puntosPremio e incrementar un punto el valor de premio (si se superara el valor puntosPremio n veces, puen descontar n*puntosPremio a puntos y sumar n premios)
+*correcciones serán los movimientos que restan puntos o que suman premios (valor parametro premios no es 0) ya que el incremento de los premios es automatico.
+Se considera normal sumar puntos, o restar premios(canjear)
+Ya en front pondremos el requerido de nombre en operaciones requeridas.
+*Estos controladores tambien crean las operaciones pertinentes.
+*Y aquí aparece otro requisito: las operaciones que modifican puntos y premios deben ejecutarse de forma atómica en la base de datos. No podemos permitir que se registre el movimiento, pero falle la actualización del saldo, o viceversa.
+*Falla la operacion si premios intenta ser negativo
+
+endpoint Admin
+(admin está permitido en todos los anteriores)
+-ver lista de comercios
+-ver lista tarjetas
+-ver datos comercio por id
+-ver datos tarjeta por id
+-registrar comercio
+-editar comercio
+-ver lista operaciones
+
+LOGICA GENERAL
+
+-Confirmación e idempotencia
+Añadiría una regla técnica con impacto directo en la lógica de negocio: cada operación de escritura debe poder protegerse frente a reintentos.
+Por ejemplo, si el camarero pulsa confirmar y la conexión falla, no podemos asumir que la operación no se guardó. Si vuelve a intentarlo, no debería sumar otros tres desayunos.
+La API debe contemplar identificadores únicos de operación o mecanismos equivalentes de idempotencia para evitar duplicados.
+
+

@@ -1,0 +1,653 @@
+# Wallet Club API — Contrato de API
+
+> **Versión 1.0 · documento de interfaz.** Fuente de verdad para cualquier cliente
+> (web, móvil, panel, script). Todo lo que no esté documentado aquí **no existe**
+> y no debe asumirse. Los ejemplos de este documento son respuestas **reales**
+> capturadas del servidor en ejecución.
+
+---
+
+## 1. Información general
+
+| Aspecto | Valor |
+|---|---|
+| Base URL (desarrollo) | `http://localhost:3000` |
+| Base URL (producción) | *la defina el propietario del proyecto* |
+| Prefijo de rutas de negocio | `/api` |
+| Salud del servicio | `GET /health` (sin autenticación) |
+| Content-Type | `application/json; charset=utf-8` (sólo JSON, UTF-8) |
+| Autenticación | `Authorization: Bearer <JWT>` (sin cookies) |
+| CORS | Habilitado, origen abierto (`*`) |
+| Rate limiting | **No aplicado** por la API |
+| Versionado en URL | No hay (`/v1` no existe) |
+| Webhooks / SSE / WebSockets | **No existen** |
+| Subida de ficheros | **No existe** (sólo JSON) |
+
+### Convención de respuestas
+
+Toda respuesta es JSON con una de estas dos formas:
+
+```jsonc
+// ÉXITO
+{ "ok": true,  ...payload }
+
+// ERROR
+{ "ok": false, "error": { "message": "texto en español", "code": "CODIGO" } }
+```
+
+- **`error.message`** es texto listo para mostrar al usuario (español).
+  **No hay campo `field`/`campo`**: para errores de validación, el nombre del
+  campo aparece dentro del mensaje (`"El campo 'puntosDelta' debe ser un número entero"`).
+- **`error.code`** es un identificador estable para ramificar en el cliente
+  (tabla de códigos en §8). Si un `code` no se reconoce, se muestra `message`.
+- Los campos `null` significan «sin valor» y **deben distinguirse** de campos
+  ausentes (`undefined`).
+- **Nunca** se devuelve `passwordHash` ni ningún hash.
+
+### Códigos HTTP usados
+
+| Código | Uso |
+|---|---|
+| `200` | Lectura correcta, o movimiento ya aplicado previamente (idempotencia) |
+| `201` | Recurso o movimiento creados |
+| `400` | Validación / regla de negocio incumplida (revisar `error.code`) |
+| `401` | Sin token, token caducado o inválido, credenciales incorrectas |
+| `403` | Rol insuficiente, comercio/tarjeta inactivo |
+| `404` | Recurso inexistente o que no pertenece al solicitante |
+| `409` | Conflicto (email duplicado, email ambiguo, idempotencia reutilizada) |
+| `500` | Error interno (`code: "INTERNAL"`) — reintentable |
+
+### Tipos de datos
+
+| Campo | Tipo |
+|---|---|
+| `id`, `comercioId`, `tarjetaId` | número entero |
+| `puntos`, `premios`, `puntosPremio`, `puntosDelta`, `premiosDelta` | número **entero** (aceptan signo en los delta) |
+| `activo` | `1` = sí, `0` = no (**número**, no booleano) |
+| `createdAt`, `updatedAt` | string ISO 8601 UTC, p. ej. `"2026-09-23T06:53:26.000Z"`; `updatedAt` puede ser `null` |
+| `idRandomLargo` | string de 48 caracteres hexadecimales |
+
+---
+
+## 2. Autenticación y roles
+
+- Los tokens son **JWT firmado**, duración por defecto **8 h** (`JWT_EXPIRES_IN`).
+- Payload: `{ "sub": <id>, "role": "admin"|"comercio"|"tarjeta", "nombre": "..." }`.
+- **No hay refresh token ni endpoint de logout**: el cliente conserva o descarta
+  el token. Ante `401 INVALID_TOKEN` → volver a pedir login.
+- El `role` del payload sólo sirve para decidir la navegación del cliente; la
+  autorización real la aplica siempre el servidor.
+
+### Matriz de permisos
+
+| Ruta | `admin` | `comercio` | `tarjeta` |
+|---|---|---|---|
+| `/api/auth/*`, `/api/registro/tarjeta/:idRandomLargo` | pública (sin token) | | |
+| `/api/tarjeta/*` | ✅ *(`?tarjetaId=` obligatorio)* | ❌ `403` | ✅ (sus propios datos) |
+| `/api/comercio/*` | ✅ *(`comercioId` obligatorio)* | ✅ (el suyo) | ❌ `403` |
+| `/api/admin/*` | ✅ | ❌ `403` | ❌ `403` |
+
+**Consideraciones para el cliente:**
+
+- Un token de `comercio` **nunca** puede leer datos de otro comercio; un token
+  de `tarjeta` sólo los suyos. No hay que enviar «el comercio del que soy»: ya
+  está en el token.
+- Si el cliente actúa como **admin sobre una ruta de comercio** debe indicar
+  explícitamente `comercioId` (query string en GET, body en POST/PATCH);
+  si falta → `400 COMERCIO_REQUERIDO`.
+- Si el cliente actúa como **admin sobre una ruta de tarjeta** debe indicar
+  `tarjetaId` en query; si falta → `400 TARJETA_REQUERIDA`.
+- El token de comercio se emite **sólo si `activo = 1`**; si el comercio se
+  desactiva con sesión iniciada, las siguientes llamadas devuelven
+  `403 COMERCIO_INACTIVO` → mostrar pantalla «comercio desactivado» y pedir
+  login de nuevo.
+- Igual para tarjeta: `403 TARJETA_INACTIVA`.
+
+### `idRandomLargo`: qué es y qué NO es
+
+- Identifica a un comercio en una URL pública (p. ej. QR de alta de cliente).
+- **No es una credencial**: no da acceso a nada privado. Para entrar hace falta
+  la password del comercio.
+- El cliente no debe tratarlo como token, sesión ni clave de API.
+
+---
+
+## 3. Endpoints públicos (sin token)
+
+### 3.1 `GET /health`
+
+```json
+{ "ok": true, "db": "conectada", "time": "2026-09-23T08:53:25.487Z" }
+```
+`503` si la base de datos no responde.
+
+---
+
+### 3.2 `POST /api/auth/admin/login`
+
+| Body | Tipo | Req. |
+|---|---|---|
+| `nombre` | string | ✅ |
+| `password` | string | ✅ |
+
+`200`:
+```json
+{
+  "ok": true,
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "role": "admin",
+  "usuario": { "id": 1, "nombre": "admin" }
+}
+```
+`401 BAD_CREDENTIALS`.
+
+---
+
+### 3.3 `POST /api/auth/comercio/login`
+
+| Body | Tipo | Req. |
+|---|---|---|
+| `password` | string | ✅ |
+| `idRandomLargo` | string | *uno de los dos* |
+| `nombre` | string | *uno de los dos* |
+
+```json
+{
+  "ok": true,
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "role": "comercio",
+  "usuario": {
+    "id": 2, "nombre": "Café Central", "puntosPremio": 10,
+    "premioDescripcion": "Café gratis",
+    "idRandomLargo": "5949aef4b6e7e66be2a4c04e0a723c92d618d6e3bcac6b43"
+  }
+}
+```
+- `401 BAD_CREDENTIALS` (password incorrecta **o** comercio inexistente: mismo error).
+- `403 COMERCIO_INACTIVO` — credenciales correctas pero comercio desactivado.
+
+---
+
+### 3.4 `POST /api/auth/tarjeta/login`
+
+| Body | Tipo | Req. |
+|---|---|---|
+| `email` | string | ✅ |
+| `password` | string | ✅ |
+| `comercioId` | número o `idRandomLargo` | ✗ *sólo si el email está en varios comercios* |
+
+```json
+{
+  "ok": true,
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "role": "tarjeta",
+  "usuario": {
+    "id": 2, "nombre": "Luis Captura", "email": "luis.cap@ejemplo.com",
+    "comercioId": 2, "puntos": 5, "premios": 2
+  }
+}
+```
+- `401 BAD_CREDENTIALS`.
+- `403 TARJETA_INACTIVA`.
+- `409 EMAIL_AMBIGUO` → el email existe en varios comercios: repetir la
+  llamada añadiendo `comercioId` (acepta el id numérico o el `idRandomLargo`).
+
+---
+
+### 3.5 `POST /api/registro/tarjeta/:idRandomLargo`
+
+Alta de cliente. **El `idRandomLargo` va en la URL** y la API deduce a qué
+comercio pertenece la tarjeta.
+
+| Body | Tipo | Req. |
+|---|---|---|
+| `nombre` | string (1–150) | ✅ |
+| `email` | string válido | ✅ |
+| `password` | string, **mínimo 6** | ✅ |
+
+`201` — **devuelve token**: el cliente queda logueado sin llamar al login:
+```json
+{
+  "ok": true,
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "role": "tarjeta",
+  "usuario": { "id": 2, "nombre": "Luis Captura", "email": "luis.cap@ejemplo.com",
+               "comercioId": 2, "puntos": 0, "premios": 0 },
+  "comercio": { "id": 2, "nombre": "Café Central" }
+}
+```
+
+| Error | Código | HTTP |
+|---|---|---|
+| Comercio inexistente en la URL | `COMERCIO_NOT_FOUND` | 400 |
+| Comercio desactivado | `COMERCIO_INACTIVO` | 403 |
+| Email ya registrado en ese comercio | `EMAIL_DUPLICADO` | 400 |
+| Faltan campos / email inválido / password < 6 | `VALIDATION` | 400 |
+
+> Un `idRandomLargo` desconocido devuelve `400` (no `404`).
+
+---
+
+## 4. Endpoints de tarjeta / cliente
+
+*Rutas: token `tarjeta` (o `admin` con `?tarjetaId=`).*
+
+### 4.1 `GET /api/tarjeta/perfil`
+
+```json
+{
+  "ok": true,
+  "tarjeta": {
+    "id": 2, "comercioId": 2, "nombre": "Luis Captura",
+    "email": "luis.cap@ejemplo.com", "puntos": 5, "premios": 2,
+    "activo": 1, "createdAt": "2026-09-23T06:53:26.000Z", "updatedAt": null
+  }
+}
+```
+Admin: `GET /api/tarjeta/perfil?tarjetaId=2`. Sin `tarjetaId` → `400 TARJETA_REQUERIDA`.
+
+### 4.2 `GET /api/tarjeta/operaciones?limite=100`
+
+Historial propio (más recientes primero).
+
+```json
+{
+  "ok": true,
+  "total": 4,
+  "operaciones": [
+    { "id": 8, "tarjetaId": 2, "comercioId": 2, "tipo": "canje",
+      "puntosDelta": 0, "premiosDelta": -1, "descripcion": null,
+      "nombre": null, "codigoCamarero": null,
+      "createdAt": "2026-09-23T06:53:28.000Z" }
+  ]
+}
+```
+> No incluye `idempotenciaKey` (eso sólo lo ve admin).
+
+---
+
+## 5. Endpoints de comercio
+
+*Rutas: token `comercio` (o `admin` + `comercioId`). **Se exige `activo = 1` en todas**.*
+
+### 5.1 `GET /api/comercio/perfil`
+
+```json
+{
+  "ok": true,
+  "comercio": { "id": 2, "nombre": "Café Central", "puntosPremio": 10,
+    "premioDescripcion": "Café gratis", "activo": 1,
+    "idRandomLargo": "5949aef4b6e7e66be2a4c04e0a723c92d618d6e3bcac6b43",
+    "createdAt": "2026-09-23T06:53:26.000Z" }
+}
+```
+> **No incluye `passwordHash`.** El `idRandomLargo` se muestra aquí para que el
+> comercio pueda generar su QR de alta.
+
+### 5.2 `GET /api/comercio/tarjetas`
+
+Todas las tarjetas del comercio (sin paginación, sin filtros).
+
+```json
+{ "ok": true, "total": 1, "tarjetas": [ { "id": 2, "comercioId": 2, "nombre": "Luis Captura",
+    "email": "luis.cap@ejemplo.com", "puntos": 5, "premios": 2, "activo": 1,
+    "createdAt": "...", "updatedAt": "..." } ] }
+```
+
+### 5.3 `GET /api/comercio/tarjetas/:id`
+
+Misma forma que 5.2 pero `"tarjeta": {...}`.
+Si la tarjeta no existe **o pertenece a otro comercio** → `404 TARJETA_NOT_FOUND`
+(mismo código en ambos casos: no conviene distinguirlos en la interfaz).
+
+### 5.4 `POST /api/comercio/tarjetas/:id/movimiento` ⭐
+
+Endpoint central: mueve puntos/premios **y** registra la operación, de forma
+atómica e idempotente.
+
+**Body**
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `puntosDelta` | entero con signo | ✅ | `0` si no toca puntos |
+| `premiosDelta` | entero con signo | ✅ | `0` si no toca premios |
+| `tipo` | string | ✗ | `acumulacion` \| `canje` \| `correccion` \| `ajuste`. Si falta, se deduce |
+| `descripcion` | string ≤255 | ✗ | |
+| `nombre` | string | ✗**/ver §6** | camarero / persona |
+| `codigoCamarero` | string | ✗**/ver §6** | va en mayúsculas en el registro |
+| `idempotencia` | string ≤64 | ✗pero **recomendado** | o cabecera `Idempotency-Key` |
+
+También se acepta `comercioId` en el body **sólo si el token es de admin**.
+
+**Cabecera opcional:** `Idempotency-Key: <clave>` (si no se manda `idempotencia` en el body).
+
+**`201` — movimiento aplicado**
+```json
+{
+  "ok": true,
+  "duplicado": false,
+  "idOperacion": 5,
+  "idConversion": 6,
+  "conversion": { "n": 2, "umbral": 10, "puntosDescontados": 20 },
+  "requiereNombre": false,
+  "tarjeta": { "id": 2, "comercioId": 2, "nombre": "Luis Captura",
+    "email": "luis.cap@ejemplo.com", "puntos": 5, "premios": 2, "activo": 1,
+    "createdAt": "...", "updatedAt": "..." }
+}
+```
+- **`tarjeta` es el saldo ya actualizado**: el cliente debe refrescar su estado
+  con este objeto, sin necesidad de otra llamada.
+- `conversion` no es `null` cuando la acumulación desencadenó canje automático:
+  `n` = premios ganados, `umbral` = `puntosPremio` del comercio,
+  `puntosDescontados` = `n * umbral`. En ese caso `idConversion` es el id de la
+  segunda operación registrada (`tipo: "canje_automatico"`).
+- `requiereNombre` indica si el servidor consideró la operación «no estándar».
+
+**`200` — reintento de una operación ya aplicada (mismo `idempotencia`)**
+```json
+{
+  "ok": true,
+  "duplicado": true,
+  "mensaje": "Operación ya registrada previamente: no se ha aplicado de nuevo",
+  "idOperacion": 5,
+  "operacion": { "id": 5, "tarjetaId": 2, "comercioId": 2, "tipo": "acumulacion",
+    "puntosDelta": 25, "premiosDelta": 0, "descripcion": "3 desayunos",
+    "nombre": null, "codigoCamarero": null,
+    "createdAt": "2026-09-23T06:53:27.000Z" },
+  "tarjeta": { "...saldo actual...": "..." },
+  "historial": [ { "...": "..." } ]
+}
+```
+Tratar `201` y `200` como **éxito**; con `duplicado: true` mostrar el resultado
+original (no repetir la animación de «sumado otra vez»).
+
+**Errores específicos**
+
+| Código | HTTP | Cuándo |
+|---|---|---|
+| `VALIDATION` | 400 | `puntosDelta`/`premiosDelta` no son enteros, ambos `0`… |
+| `SIN_EFECTO` | 400 | los dos deltas son `0` |
+| `TIPO_INVALIDO` | 400 | `tipo` fuera del enum permitido |
+| `NOMBRE_REQUERIDO` | 400 | operación no estándar sin `nombre` |
+| `CODIGO_CAMARERO_REQUERIDO` | 400 | operación no estándar sin `codigoCamarero` |
+| `CODIGO_CAMARERO_INVALIDO` | 400 | el código no está en la lista permitida |
+| `PREMIOS_NEGATIVOS` | 400 | el canje dejaría los premios en negativo |
+| `PUNTOS_NEGATIVOS` | 400 | el ajuste dejaría los puntos en negativo |
+| `IDEMPOTENCIA_CONFLICTO` | **409** | misma clave con contenido distinto |
+| `TARJETA_NOT_FOUND` | 404 | tarjeta inexistente o de otro comercio |
+| `TARJETA_INACTIVA` | 403 | tarjeta desactivada |
+| `COMERCIO_INACTIVO` | 403 | comercio desactivado |
+| `COMERCIO_REQUERIDO` | 400 | admin sin `comercioId` |
+| `UNAUTHORIZED` / `INVALID_TOKEN` | 401 | sin token o caducado |
+| `FORBIDDEN_ROLE` | 403 | rol equivocado |
+
+---
+
+## 6. Reglas del movimiento (lo que el cliente debe reflejar)
+
+1. **Deltas enteros.** Un decimal produce `400 VALIDATION`.
+2. **Canje automático de puntos.** Si `puntosDelta > 0` y los nuevos puntos
+   alcanjan `puntosPremio` del comercio, la API descuenta `n * puntosPremio`
+   y suma `n` premios (`n = floor(puntos / puntosPremio)`), registrando además
+   una operación `tipo: "canje_automatico"` con `nombre: "sistema"`.
+   El cliente **no** debe calcular ni replicar esta conversión: debe leer
+   `tarjeta` de la respuesta.
+3. **Premios nunca en negativo** (idem puntos): la petición se rechaza, no
+   hace «clip» a 0.
+4. **Operación estándar vs. no estándar** (cuándo enviar `nombre` + `codigoCamarero`):
+
+   | Movimiento | Estándar | `nombre`/`codigoCamarero` |
+   |---|---|---|
+   | Sumar puntos por debajo del umbral | ✅ | opcionales |
+   | Restar premios (canjear) | ✅ | opcionales |
+   | Sumar premios a mano (`premiosDelta > 0`) | ❌ | **obligatorios** |
+   | Restar puntos (`puntosDelta < 0`) | ❌ | **obligatorios** |
+   | Sumar más de `UMBRAL_PUNTOS_NOMBRE` puntos (100 por defecto) | ❌ | **obligatorios** |
+
+   Si el servidor rechaza con `NOMBRE_REQUERIDO` / `CODIGO_CAMARERO_REQUERIDO`,
+   el cliente debe pedir los datos y reenviar **la misma** `idempotencia`.
+   En operaciones estándar `nombre` queda `null`: no hay que rellenarlo.
+5. **Tipos** (si el cliente no envía `tipo`, la API lo deduce):
+
+   | `tipo` | Significado | Deducción automática |
+   |---|---|---|
+   | `acumulacion` | sumar puntos | `puntosDelta > 0` |
+   | `canje` | canjear premios | `premiosDelta < 0` y `puntosDelta = 0` |
+   | `correccion` | ajuste manual | `premiosDelta > 0` o `puntosDelta < 0` |
+   | `ajuste` | sólo si se envía explícitamente | — |
+   | `canje_automatico` | generado por el servidor | — (sólo lectura) |
+
+6. **Los saldos son autoritativos en la respuesta**: `tarjeta.puntos` y
+   `tarjeta.premios` tras el movimiento.
+
+### Idempotencia (obligatoria en la práctica)
+
+Motivo: si la red falla al confirmar, el reintento **no debe** duplicar el movimiento.
+
+| Situación | Respuesta |
+|---|---|
+| Misma clave, mismo contenido, primera vez | `201`, `duplicado: false` |
+| Misma clave, mismo contenido, reintento | `200`, `duplicado: true`, sin aplicar de nuevo |
+| Misma clave, contenido distinto | `409 IDEMPOTENCIA_CONFLICTO` |
+| Sin clave | se aplica siempre (sin protección) |
+
+**Recomendación de uso:** generar un UUID v4 en el cliente **en el momento en
+que el usuario confirma** la acción, guardarlo en la petición, y reutilizarlo
+en todos los reintentos de esa misma acción. Sólo se genera uno nuevo cuando
+el usuario lanza una acción nueva. Máx. 64 caracteres.
+
+La comprobación se hace **antes** que las validaciones de contenido: un
+reintento devuelve el resultado original aunque el resto de la petición
+hubiera cambiado levemente (si cambian los deltas → `409`).
+
+---
+
+## 7. Endpoints de administrador
+
+*Sólo token `admin`.*
+
+### 7.1 `GET /api/admin/comercios`
+
+```json
+{ "ok": true, "total": 1, "comercios": [
+  { "id": 2, "nombre": "Café Central", "puntosPremio": 10,
+    "premioDescripcion": "Café gratis", "activo": 1,
+    "idRandomLargo": "5949...", "createdAt": "...", "updatedAt": null } ] }
+```
+
+### 7.2 `GET /api/admin/comercios/:id` → `{ ok, comercio }` · `404 COMERCIO_NOT_FOUND`
+
+### 7.3 `POST /api/admin/comercios`
+
+| Body | Tipo | Req. |
+|---|---|---|
+| `nombre` | string | ✅ |
+| `password` | string, **mínimo 8** | ✅ |
+| `puntosPremio` | entero > 0 | ✗ (defecto 10) |
+| `premioDescripcion` | string | ✗ |
+| `activo` | booleano | ✗ (defecto `true`) |
+
+`201 { ok, comercio }` con el `idRandomLargo` **recién generado** (mostrarlo/guardarlo
+para el QR del comercio). Si ya existe ese nombre → `400 COMERCIO_DUPLICADO`.
+
+### 7.4 `PATCH /api/admin/comercios/:id`
+
+Actualización parcial: cualquiera de los campos de 7.3 (`password` cambia la
+contraseña). Sin campos → `400 VALIDATION`. Devuelve `{ ok, comercio }` con
+`updatedAt` refrescado.
+
+### 7.5 `GET /api/admin/tarjetas?comercioId=`
+
+Filtro opcional. Igual que 7.1 pero con `tarjetas`.
+
+### 7.6 `GET /api/admin/tarjetas/:id` → `{ ok, tarjeta }` · `404 TARJETA_NOT_FOUND`
+
+### 7.7 `GET /api/admin/operaciones`
+
+**Query**
+
+| Parámetro | Tipo | Notas |
+|---|---|---|
+| `comercioId` | entero | opcional |
+| `tarjetaId` | entero | opcional |
+| `tipo` | string | `acumulacion` \| `canje` \| `correccion` \| `ajuste` \| `canje_automatico` |
+| `desde` / `hasta` | string | se comparan con `createdAt`; formato recomendado `YYYY-MM-DD HH:MM:SS` (amplía el rango si hay dudas de zona horaria) |
+| `pagina` | entero ≥1 | defecto 1 |
+| `tamano` | entero 1–200 | defecto 50 |
+
+```json
+{
+  "ok": true, "total": 4, "pagina": 1, "tamano": 10,
+  "filas": [
+    { "id": 8, "tarjetaId": 2, "comercioId": 2, "tipo": "canje",
+      "puntosDelta": 0, "premiosDelta": -1, "descripcion": null,
+      "nombre": null, "codigoCamarero": null, "idempotenciaKey": "cap-005",
+      "createdAt": "2026-09-23T06:53:28.000Z",
+      "tarjetaNombre": "Luis Captura", "tarjetaEmail": "luis.cap@ejemplo.com",
+      "comercioNombre": "Café Central" }
+  ]
+}
+```
+`total` es el total **sin paginar**; `filas` es la página actual.
+Orden: descendente por fecha.
+
+### 7.8 El admin en rutas de comercio/tarjeta
+
+```http
+GET /api/comercio/tarjetas?comercioId=2          con token admin   → 200
+GET /api/comercio/tarjetas                        con token admin   → 400 COMERCIO_REQUERIDO
+GET /api/tarjeta/perfil?tarjetaId=2               con token admin   → 200
+GET /api/admin/operaciones                        con token comercio→ 403 FORBIDDEN_ROLE
+```
+
+---
+
+## 8. Índice de `error.code`
+
+| Code | HTTP | Significado / acción sugerida |
+|---|---|---|
+| `VALIDATION` | 400 | Mostrar `message` tal cual |
+| `SIN_EFECTO` | 400 | La operación no cambia nada |
+| `TIPO_INVALIDO` | 400 | Corregir el enum |
+| `NOMBRE_REQUERIDO` | 400 | Pedir nombre de camarero y reenviar |
+| `CODIGO_CAMARERO_REQUERIDO` | 400 | Pedir código y reenviar |
+| `CODIGO_CAMARERO_INVALIDO` | 400 | Código no autorizado |
+| `PREMIOS_NEGATIVOS` | 400 | Canje superior a lo disponible |
+| `PUNTOS_NEGATIVOS` | 400 | Descuento superior a lo disponible |
+| `COMERCIO_NOT_FOUND` | 400/404 | URL de registro inválida / recurso no existe |
+| `COMERCIO_DUPLICADO` | 400 | Nombre de comercio ya usado |
+| `COMERCIO_REQUERIDO` | 400 | Admin sin `comercioId` |
+| `TARJETA_REQUERIDA` | 400 | Admin sin `tarjetaId` |
+| `EMAIL_DUPLICADO` | 400 | Registro repetido en ese comercio |
+| `UNAUTHORIZED` | 401 | Falta token → login |
+| `INVALID_TOKEN` | 401 | Token caducado/inválido → login |
+| `BAD_CREDENTIALS` | 401 | Usuario o contraseña incorrectos |
+| `FORBIDDEN_ROLE` | 403 | Rol equivocado para esa ruta |
+| `COMERCIO_INACTIVO` | 403 | Cuenta de comercio desactivada |
+| `TARJETA_INACTIVA` | 403 | Tarjeta desactivada |
+| `TARJETA_NOT_FOUND` | 404 | No existe o no pertenece al comercio |
+| `NOT_FOUND` | 404 | Recurso genérico |
+| `EMAIL_AMBIGUO` | 409 | Repetir login con `comercioId` |
+| `IDEMPOTENCIA_CONFLICTO` | 409 | Clave de idempotencia reutilizada con otros datos |
+| `DUPLICATE` | 409 | Clave única duplicada (carrera) |
+| `ROUTE_NOT_FOUND` | 404 | URL incorrecta |
+| `INTERNAL` | 500 | Reintentar / avisar |
+| `COMERCIO_NOT_FOUND` (registro) | 400 | `idRandomLargo` desconocido |
+
+---
+
+## 9. Catálogo completo de endpoints
+
+| # | Método | Ruta | Rol |
+|---|---|---|---|
+| 1 | GET | `/health` | público |
+| 2 | POST | `/api/auth/admin/login` | público |
+| 3 | POST | `/api/auth/comercio/login` | público |
+| 4 | POST | `/api/auth/tarjeta/login` | público |
+| 5 | POST | `/api/registro/tarjeta/:idRandomLargo` | público |
+| 6 | GET | `/api/tarjeta/perfil` | tarjeta / admin |
+| 7 | GET | `/api/tarjeta/operaciones` | tarjeta / admin |
+| 8 | GET | `/api/comercio/perfil` | comercio / admin |
+| 9 | GET | `/api/comercio/tarjetas` | comercio / admin |
+| 10 | GET | `/api/comercio/tarjetas/:id` | comercio / admin |
+| 11 | POST | `/api/comercio/tarjetas/:id/movimiento` | comercio / admin |
+| 12 | GET | `/api/admin/comercios` | admin |
+| 13 | GET | `/api/admin/comercios/:id` | admin |
+| 14 | POST | `/api/admin/comercios` | admin |
+| 15 | PATCH | `/api/admin/comercios/:id` | admin |
+| 16 | GET | `/api/admin/tarjetas` | admin |
+| 17 | GET | `/api/admin/tarjetas/:id` | admin |
+| 18 | GET | `/api/admin/operaciones` | admin |
+
+---
+
+## 10. Lo que NO existe (no implementarlo en el cliente)
+
+- ❌ `DELETE` de cualquier recurso (ni comercios, ni tarjetas, ni operaciones).
+- ❌ Edición de tarjetas (nombre, email, password, activo): **sólo lectura**.
+- ❌ Activar/desactivar una tarjeta.
+- ❌ Recuperación / reseteo de contraseña por email.
+- ❌ Cambio de contraseña desde el cliente.
+- ❌ Logout en servidor ni refresh token.
+- ❌ Registro público de comercios (sólo admin).
+- ❌ Listado público de comercios (el `idRandomLargo` llega por QR/enlace).
+- ❌ Búsqueda con texto libre, filtros de tarjetas por nombre/email (sólo
+  `comercioId` en admin), ni paginación en `/api/comercio/tarjetas`.
+- ❌ Edición o borrado de operaciones (el libro de movimientos es inmutable).
+- ❌ Endpoints de ficheros, notificaciones push, websockets o webhooks.
+
+---
+
+## 11. Ejemplos `curl`
+
+```bash
+BASE=http://localhost:3000
+
+# Login admin
+curl -s -X POST $BASE/api/auth/admin/login \
+  -H "Content-Type: application/json" \
+  -d '{"nombre":"admin","password":"..."}'
+
+# Crear comercio
+curl -s -X POST $BASE/api/admin/comercios \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"nombre":"Café Central","password":"...","puntosPremio":10,"premioDescripcion":"Café gratis"}'
+
+# Alta de cliente (idRandomLargo en la URL)
+curl -s -X POST $BASE/api/registro/tarjeta/$ID_RANDOM \
+  -H "Content-Type: application/json" \
+  -d '{"nombre":"Luis","email":"luis@x.com","password":"secreto1"}'
+
+# Acumular puntos con idempotencia
+curl -s -X POST $BASE/api/comercio/tarjetas/2/movimiento \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $COMERCIO_TOKEN" \
+  -H "Idempotency-Key: 6f1c1f3e-6f3a-4a1e-9d3a-1a2b3c4d5e6f" \
+  -d '{"puntosDelta":25,"premiosDelta":0,"descripcion":"3 desayunos"}'
+
+# Canje de premios
+curl -s -X POST $BASE/api/comercio/tarjetas/2/movimiento \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $COMERCIO_TOKEN" \
+  -H "Idempotency-Key: 8a2d4b7c-1111-4444-8888-9999aaaabbbb" \
+  -d '{"puntosDelta":0,"premiosDelta":-1,"tipo":"canje"}'
+
+# Corrección manual de premios (exige nombre + camarero)
+curl -s -X POST $BASE/api/comercio/tarjetas/2/movimiento \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $COMERCIO_TOKEN" \
+  -H "Idempotency-Key: 9b3e5d8f-2222-4444-8888-ccccccddeeee" \
+  -d '{"puntosDelta":0,"premiosDelta":1,"nombre":"Ana","codigoCamarero":"ANA-01","tipo":"correccion"}'
+
+# Operaciones con filtros y paginación
+curl -s "$BASE/api/admin/operaciones?comercioId=2&pagina=1&tamano=20" \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+## 12. Comprobación previa a integrar
+
+- [ ] `GET /health` → `{"ok":true,"db":"conectada"}`.
+- [ ] Los tres logins devuelven `token` y `role`.
+- [ ] Un token de comercio con `activo=0` recibe `403 COMERCIO_INACTIVO`.
+- [ ] Una misma `Idempotency-Key` reenviada devuelve `duplicado: true` y el
+      saldo no cambia.
+- [ ] `error.message` se puede pintar directamente en la interfaz.
