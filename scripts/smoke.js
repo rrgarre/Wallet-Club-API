@@ -89,6 +89,13 @@ function run(sqlRaw, params = []) {
   }
 
   // ---- UPDATE ----
+  if (/^UPDATE tarjetas SET googleWalletObjetoId = \? WHERE id = \?/i.test(s)) {
+    const t = store.tarjetas.find((x) => x.id === params[1]);
+    if (!t) return { kind: 'result', result: { affectedRows: 0 } };
+    t.googleWalletObjetoId = params[0];
+    t.updatedAt = new Date().toISOString();
+    return { kind: 'result', result: { affectedRows: 1 } };
+  }
   if (/^UPDATE tarjetas SET puntos = \?, premios = \? WHERE id = \?/i.test(s)) {
     const t = store.tarjetas.find((x) => x.id === params[2]);
     if (!t) return { kind: 'result', result: { affectedRows: 0 } };
@@ -354,6 +361,7 @@ async function main() {
   // Stub del servicio de Google Wallet (no llamamos a Google de verdad)
   // ---------------------------------------------------------------
   const googleWalletStub = require('../src/services/googleWalletService');
+  const generarEnlaceReal = googleWalletStub.generarEnlaceTarjeta; // builder real (sin red)
   const { env } = require('../src/config/env');
   const ultimaLlamada = { params: null };
   googleWalletStub.crearClase = async (params) => {
@@ -363,6 +371,11 @@ async function main() {
     return { creada: true, claseId, clase: { id: claseId, reviewStatus: params.reviewStatus } };
   };
   googleWalletStub.obtenerClase = async () => ({ reviewStatus: 'UNDER_REVIEW' });
+  googleWalletStub.generarEnlaceTarjeta = ({ claseId, tarjeta, comercio }) => ({
+    url: `https://pay.google.com/gp/v/save/FAKE_${tarjeta.id}`,
+    objectId: `${env.googleWallet.issuerId}.USER_${tarjeta.id}_COMERCIO_${comercio.idRandomLargo}`,
+    qrUrl: env.frontUrl ? `${env.frontUrl}/comercio/captura/${tarjeta.id}` : '',
+  });
 
   const app = require('../src/app');
   const server = app.listen(0);
@@ -699,6 +712,88 @@ async function main() {
     `(${r.status}, code=${r.json?.error?.code})`
   );
   global.__GW_YA_EXISTE = false;
+
+  // ---------------- TARJETAS / OBJETOS (enlace "Añadir a Wallet") ----------------
+  // Comercio 1 SIN clase todavía: el alta funciona y googleWalletUrl queda null
+  store.comercios[0].googleWalletClaseId = null;
+  r = await req('POST', '/api/registro/tarjeta/' + CLASE_IDR, {
+    body: { nombre: 'Sin Clase', email: 'sinclase@x.com', password: 'secreto1' },
+  });
+  check(
+    'registro en comercio SIN clase -> 201 con googleWalletUrl null',
+    r.status === 201 && r.json.googleWalletUrl === null && r.json.usuario.googleWalletObjetoId === null,
+    `(${r.status}, url=${r.json?.googleWalletUrl})`
+  );
+
+  // Le asignamos clase y estado DRAFT: Google aún no admite tarjetas
+  store.comercios[0].googleWalletClaseId = `${env.googleWallet.issuerId}.${CLASE_IDR}`;
+  store.comercios[0].googleWalletClaseEstado = 'DRAFT';
+  r = await req('POST', '/api/registro/tarjeta/' + CLASE_IDR, {
+    body: { nombre: 'Draft', email: 'draft@x.com', password: 'secreto1' },
+  });
+  check(
+    'clase en DRAFT -> alta ok pero googleWalletUrl null',
+    r.status === 201 && r.json.googleWalletUrl === null,
+    `(${r.status}, url=${r.json?.googleWalletUrl})`
+  );
+
+  // Clase aprobada: sí debe salir el enlace
+  store.comercios[0].googleWalletClaseEstado = 'approved';
+  r = await req('POST', '/api/registro/tarjeta/' + CLASE_IDR, {
+    body: { nombre: 'Con Wallet', email: 'wallet@x.com', password: 'secreto1' },
+  });
+  check(
+    'registro con clase aprobada -> 201 con googleWalletUrl',
+    r.status === 201 && /^https:\/\/pay\.google\.com\/gp\/v\/save\//.test(r.json.googleWalletUrl),
+    `(${r.status}, url=${String(r.json?.googleWalletUrl).slice(0, 60)}...)`
+  );
+  const nuevaWallet = r.json;
+  check(
+    'el objeto de Google se guarda en la tarjeta',
+    nuevaWallet.usuario.googleWalletObjetoId ===
+      `${env.googleWallet.issuerId}.USER_${nuevaWallet.usuario.id}_COMERCIO_${CLASE_IDR}`,
+    `(objetoId=${nuevaWallet.usuario.googleWalletObjetoId})`
+  );
+  check(
+    'la fila en BD tiene googleWalletObjetoId',
+    !!store.tarjetas.find((t) => t.id === nuevaWallet.usuario.id)?.googleWalletObjetoId
+  );
+
+  // El enlace firmado con el builder REAL debe llevar el objeto correcto
+  if (env.googleWallet.issuerId && env.frontUrl) {
+    try {
+      const enlaceReal = generarEnlaceReal({
+        claseId: store.comercios[0].googleWalletClaseId,
+        tarjeta: { id: 7, nombre: 'Luis', puntos: 4, premios: 1 },
+        comercio: store.comercios[0],
+      });
+      // El token va DESPUÉS del último '/': el dominio también tiene puntos
+      const jwtTarjeta = enlaceReal.url.split('/').pop();
+      const payload = JSON.parse(
+        Buffer.from(
+          jwtTarjeta.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'),
+          'base64'
+        ).toString()
+      );
+      const obj = payload.payload.loyaltyObjects[0];
+      check(
+        'builder real: JWT savetowallet con el objeto correcto',
+        payload.typ === 'savetowallet' &&
+          obj.id === `${env.googleWallet.issuerId}.USER_7_COMERCIO_${CLASE_IDR}` &&
+          obj.classId === store.comercios[0].googleWalletClaseId &&
+          obj.state === 'ACTIVE' &&
+          obj.accountId === '7' &&
+          obj.accountName === 'Luis' &&
+          obj.barcode.value === `${env.frontUrl}/comercio/captura/7` &&
+          obj.loyaltyPoints.balance.int === 4 &&
+          obj.secondaryLoyaltyPoints.balance.int === 1
+      );
+    } catch (e) {
+      check('builder real: JWT savetowallet con el objeto correcto', false, e.message);
+    }
+  } else {
+    check('builder real: (omitido, faltan GOOGLE_WALLET_ISSUER_ID / FRONT_URL en .env)', true);
+  }
 
   // ---------------- resumen ----------------
   const fallos = resultados.filter((x) => !x.ok);

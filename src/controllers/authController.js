@@ -4,6 +4,7 @@
 const dbAdmins = require('../db/admin');
 const dbComercios = require('../db/comercios');
 const dbTarjetas = require('../db/tarjetas');
+const googleWallet = require('../services/googleWalletService');
 const { firmarToken } = require('../middlewares/auth');
 const { hashPassword, verifyPassword } = require('../utils/hash');
 const { unauthorized, forbidden, badRequest } = require('../utils/errors');
@@ -154,6 +155,33 @@ async function registroTarjeta(req, res, next) {
     });
 
     const token = firmarToken({ sub: tarjeta.id, role: 'tarjeta', nombre: tarjeta.nombre });
+
+    // ------------------------------------------------------------------
+    // Google Wallet: si el comercio YA tiene clase creada (y no está en
+    // DRAFT), generamos el enlace "Añadir a Google Wallet" de ESTA
+    // tarjeta. Si no la tiene: alta igual y googleWalletUrl = null.
+    // La creación del enlace es local (firma un JWT): no llama a Google.
+    // ------------------------------------------------------------------
+    let googleWalletUrl = null;
+    if (
+      comercio.googleWalletClaseId &&
+      googleWallet.claseAdmiteTarjetas(comercio.googleWalletClaseEstado)
+    ) {
+      try {
+        const enlace = googleWallet.generarEnlaceTarjeta({
+          claseId: comercio.googleWalletClaseId, // id de la clase en Google
+          tarjeta,                                // {id, nombre, puntos, premios...}
+          comercio,                               // {idRandomLargo, nombre...}
+        });
+        googleWalletUrl = enlace.url;
+        await dbTarjetas.guardarObjetoGoogleWallet(tarjeta.id, enlace.objectId);
+        tarjeta.googleWalletObjetoId = enlace.objectId;
+      } catch (err) {
+        // Nunca hacemos fallar el alta por un problema de Google Wallet.
+        console.error('[google-wallet] no se pudo generar el enlace:', err.message);
+      }
+    }
+
     res.status(201).json({
       ok: true,
       token,
@@ -165,8 +193,10 @@ async function registroTarjeta(req, res, next) {
         comercioId: tarjeta.comercioId,
         puntos: tarjeta.puntos,
         premios: tarjeta.premios,
+        googleWalletObjetoId: tarjeta.googleWalletObjetoId ?? null,
       },
       comercio: { id: comercio.id, nombre: comercio.nombre },
+      googleWalletUrl,
     });
   } catch (err) {
     next(err);

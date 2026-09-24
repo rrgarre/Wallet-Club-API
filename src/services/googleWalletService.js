@@ -299,4 +299,126 @@ async function obtenerClase(classId) {
   return datos;
 }
 
-module.exports = { SCOPE, configuracion, classIdDe, obtenerToken, construirClase, crearClase, obtenerClase };
+// =====================================================================
+//  TARJETAS (objetos) — enlace "Añadir a Google Wallet"
+// ---------------------------------------------------------------------
+//  La CLASE ya existe (se creó con el endpoint de clase). Aquí sólo se
+//  construye el OBJETO (tarjeta) concreto de un usuario y se firma un
+//  JWT "savetowallet": Google crea la tarjeta cuando el usuario abre
+//  el enlace y pulsa "Guardar".
+//
+//  ⚠ La URL no está vinculada a ninguna cuenta: quien la abra se la
+//  guarda en SU Google Wallet. Devuélvela sólo al cliente del alta.
+//
+//  La clase debe estar en UNDER_REVIEW/APPROVED (una clase DRAFT no
+//  admite tarjetas).
+// =====================================================================
+
+/**
+ * Normaliza el id de la clase: acepta el id completo o sólo el sufijo.
+ *   resolverClassId('COMERCIO_2')                     → '<issuerId>.COMERCIO_2'
+ *   resolverClassId('<issuerId>.COMERCIO_2')          → '<issuerId>.COMERCIO_2'
+ */
+function resolverClassId(clase) {
+  const { issuerId } = configuracion();
+  if (!clase) {
+    throw new AppError(
+      503,
+      'Este comercio todavía no tiene clase creada en Google Wallet',
+      'GOOGLE_WALLET_SIN_CLASE'
+    );
+  }
+  return String(clase).includes('.') ? String(clase) : `${issuerId}.${clase}`;
+}
+
+/**
+ * Id único del objeto (tarjeta) en todo Google Wallet.
+ * Caracteres permitidos: letras, números, '.', '_' o '-'.
+ */
+function objectIdDe(tarjetaId, idRandomLargo) {
+  const { issuerId } = configuracion();
+  return `${issuerId}.USER_${tarjetaId}_COMERCIO_${idRandomLargo}`;
+}
+
+/** QR que escaneará el camarero: FRONT_URL + /comercio/captura/ + idTarjeta. */
+function qrDeTarjeta(tarjetaId) {
+  if (!env.frontUrl) {
+    throw new AppError(503, 'Falta FRONT_URL en el fichero .env', 'GOOGLE_WALLET_SIN_CONFIG');
+  }
+  return `${env.frontUrl}/comercio/captura/${tarjetaId}`;
+}
+
+/**
+ * Construye el enlace "Añadir a Google Wallet" para una tarjeta NUEVA.
+ * (Sólo firma un JWT local: no llama a Google; la tarjeta se materializa
+ *  allí cuando el usuario abre el enlace.)
+ *
+ * @param {object} p
+ * @param {string} p.claseId  id de la CLASE del comercio (comercios.googleWalletClaseId)
+ * @param {object} p.tarjeta  fila de la tarjeta (id, nombre, puntos, premios...)
+ * @param {object} p.comercio fila del comercio (idRandomLargo, nombre...)
+ * @returns {{url:string, objectId:string, qrUrl:string}}
+ */
+function generarEnlaceTarjeta({ claseId, tarjeta, comercio }) {
+  const { credenciales } = configuracion();
+  const classId = resolverClassId(claseId);
+  const objectId = objectIdDe(tarjeta.id, comercio.idRandomLargo);
+  const qrUrl = qrDeTarjeta(tarjeta.id);
+
+  const objeto = {
+    // ---- Imprescindibles ----
+    id: objectId,
+    classId, // ← hereda logo, color y textos de la clase
+    state: 'ACTIVE', // 'ACTIVE' | 'EXPIRED' | 'COMPLETED'
+
+    // ---- Datos del usuario (nuestra BD) ----
+    accountId: String(tarjeta.id), // id interno (máx. 20 caracteres; Google no lo verifica)
+    accountName: tarjeta.nombre,   // nombre visible en la tarjeta
+
+    // ---- Código de canje: la URL de captura del camarero ----
+    barcode: { type: 'QR_CODE', value: qrUrl },
+
+    // ---- Contadores (lo que Google renderiza siempre) ----
+    loyaltyPoints: { label: 'Puntos', balance: { int: tarjeta.puntos ?? 0 } },
+    secondaryLoyaltyPoints: { label: 'Premios', balance: { int: tarjeta.premios ?? 0 } },
+
+    // ---- Potenciales (descomentar cuando hagan falta) ----
+    // heroImage: { sourceUri: { uri: 'https://...' }, contentDescription: {...} },
+    // messages: [{ header: '¡Bienvenido!', body: '...', messageType: 'TEXT' }],
+    // textModulesData: [{ id: 'TARJETA', header: 'Nº tarjeta', body: '0000-0001' }],
+    // validTimeInterval: { start: { date: '...' }, end: { date: '...' } },
+    // notifyPreference: 'NOTIFY_ON_UPDATE',   // avisos al PATCHear (se resetea en cada PATCH)
+  };
+
+  // JWT con SÓLO payload.loyaltyObjects (NO loyaltyClasses: la clase ya existe).
+  const claims = {
+    iss: credenciales.client_email,
+    aud: 'google',
+    typ: 'savetowallet',
+    payload: { loyaltyObjects: [objeto] },
+  };
+
+  const token = jwt.sign(claims, credenciales.private_key, { algorithm: 'RS256' });
+  return { url: `https://pay.google.com/gp/v/save/${token}`, objectId, qrUrl };
+}
+
+/** ¿El estado guardado de la clase admite crear tarjetas? (DRAFT, no) */
+function claseAdmiteTarjetas(estado) {
+  if (!estado) return true; // sin dato: dejamos que Google decida
+  return String(estado).trim().toLowerCase() !== 'draft';
+}
+
+module.exports = {
+  SCOPE,
+  configuracion,
+  classIdDe,
+  obtenerToken,
+  construirClase,
+  crearClase,
+  obtenerClase,
+  resolverClassId,
+  objectIdDe,
+  qrDeTarjeta,
+  generarEnlaceTarjeta,
+  claseAdmiteTarjetas,
+};

@@ -1,11 +1,13 @@
 # Wallet Club API — Contrato de API
 
-> **Versión 1.1 · documento de interfaz.** Fuente de verdad para cualquier cliente
+> **Versión 1.2 · documento de interfaz.** Fuente de verdad para cualquier cliente
 > (web, móvil, panel, script). Todo lo que no esté documentado aquí **no existe**
 > y no debe asumirse. Los ejemplos de este documento son respuestas **reales**
 > capturadas del servidor en ejecución.
 > *v1.1: añadido el endpoint de alta de clase de Google Wallet (§7.9) y los
 > campos `googleWalletClaseId`/`googleWalletClaseEstado` de los comercios.*
+> *v1.2: el registro de tarjeta devuelve `googleWalletUrl` (enlace «Añadir a
+> Google Wallet») y los objetos tarjeta incluyen `googleWalletObjetoId`.*
 
 ---
 
@@ -70,6 +72,7 @@ Toda respuesta es JSON con una de estas dos formas:
 | `activo` | `1` = sí, `0` = no (**número**, no booleano) |
 | `createdAt`, `updatedAt` | string ISO 8601 UTC, p. ej. `"2026-09-23T06:53:26.000Z"`; `updatedAt` puede ser `null` |
 | `idRandomLargo` | string de 48 caracteres hexadecimales |
+| `googleWalletObjetoId`, `googleWalletClaseId` | string o `null` (ids de Google Wallet) |
 
 ---
 
@@ -216,10 +219,28 @@ comercio pertenece la tarjeta.
   "token": "eyJhbGciOiJIUzI1NiIs...",
   "role": "tarjeta",
   "usuario": { "id": 2, "nombre": "Luis Captura", "email": "luis.cap@ejemplo.com",
-               "comercioId": 2, "puntos": 0, "premios": 0 },
-  "comercio": { "id": 2, "nombre": "Café Central" }
+               "comercioId": 2, "puntos": 0, "premios": 0,
+               "googleWalletObjetoId": "3388000000023208299.USER_2_COMERCIO_5949..." },
+  "comercio": { "id": 2, "nombre": "Café Central" },
+  "googleWalletUrl": "https://pay.google.com/gp/v/save/eyJhbGciOiJSUzI1NiIs..."
 }
 ```
+
+**`googleWalletUrl`** (nuevo): enlace «Añadir a Google Wallet» de **esta** tarjeta.
+
+- **`string`** si el comercio **ya tiene clase creada** en Google Wallet (y no
+  está en `DRAFT`): el cliente debe ofrecerlo al usuario en el momento del alta
+  (botón/enlace «Guardar en Google Wallet»).
+- **`null`** si el comercio todavía no tiene clase creada, la clase está en
+  `DRAFT` o hubo un problema de configuración: **el alta se completa igualmente**
+  (no es un error; se puede mostrar «este comercio aún no tiene tarjeta en
+  Google Wallet»).
+- ⚠ **La URL no está vinculada a ninguna cuenta**: quien la abra se la guarda
+  en **su** Google Wallet. Devuélvela **sólo** al cliente del alta: no la
+  expongas en listados ni la registres en analíticas.
+- **No existe** endpoint para recuperarla después (no está en el perfil).
+- `usuario.googleWalletObjetoId` es el id del objeto en Google Wallet (`null`
+  si no se generó enlace).
 
 | Error | Código | HTTP |
 |---|---|---|
@@ -244,11 +265,14 @@ comercio pertenece la tarjeta.
   "tarjeta": {
     "id": 2, "comercioId": 2, "nombre": "Luis Captura",
     "email": "luis.cap@ejemplo.com", "puntos": 5, "premios": 2,
-    "activo": 1, "createdAt": "2026-09-23T06:53:26.000Z", "updatedAt": null
+    "activo": 1, "createdAt": "2026-09-23T06:53:26.000Z", "updatedAt": null,
+    "googleWalletObjetoId": null
   }
 }
 ```
 Admin: `GET /api/tarjeta/perfil?tarjetaId=2`. Sin `tarjetaId` → `400 TARJETA_REQUERIDA`.
+> `googleWalletObjetoId` es `null` cuando la tarjeta no tiene enlace de Google
+> Wallet. **El enlace en sí NO está aquí** (sólo se devuelve en el registro).
 
 ### 4.2 `GET /api/tarjeta/operaciones?limite=100`
 
@@ -299,7 +323,7 @@ Todas las tarjetas del comercio (sin paginación, sin filtros).
 ```json
 { "ok": true, "total": 1, "tarjetas": [ { "id": 2, "comercioId": 2, "nombre": "Luis Captura",
     "email": "luis.cap@ejemplo.com", "puntos": 5, "premios": 2, "activo": 1,
-    "createdAt": "...", "updatedAt": "..." } ] }
+    "createdAt": "...", "updatedAt": "...", "googleWalletObjetoId": null } ] }
 ```
 
 ### 5.3 `GET /api/comercio/tarjetas/:id`
@@ -748,4 +772,6 @@ curl -s -X POST $BASE/api/admin/comercios/$ID_RANDOM/google-wallet/clase \
 - [ ] El alta de clase de Google Wallet devuelve `201` con `clase.id`, y un
       segundo envío del mismo formulario devuelve `409 GOOGLE_CLASE_YA_EXISTE`
       (mostrar el conflicto, no reintentar en bucle).
+- [ ] El registro devuelve `googleWalletUrl`: si es `string`, ofrecer «Guardar
+      en Google Wallet» al usuario; si es `null`, completar el alta sin más.
 - [ ] `error.message` se puede pintar directamente en la interfaz.

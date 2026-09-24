@@ -35,6 +35,10 @@ const env = {
     issuerId: process.env.GOOGLE_WALLET_ISSUER_ID || '',
     credenciales: process.env.GOOGLE_WALLET_CREDENTIALS || '',
   },
+
+  // URL base del front: de aquí sale el QR de cada tarjeta
+  //   FRONT_URL + '/comercio/captura/' + idTarjeta
+  frontUrl: (process.env.FRONT_URL || '').replace(/\/+$/, ''),
 };
 
 function validarEnv() {

@@ -4,7 +4,7 @@
 const { get, query, execute } = require('./connection');
 
 const COLUMNA_SAFE =
-  'id, comercioId, nombre, email, puntos, premios, activo, createdAt, updatedAt';
+  'id, comercioId, nombre, email, puntos, premios, activo, createdAt, updatedAt, googleWalletObjetoId';
 
 async function findById(id) {
   return get('SELECT * FROM tarjetas WHERE id = ?', [id]);
@@ -100,6 +100,18 @@ async function create(datos) {
   return findById(result.insertId);
 }
 
+/**
+ * Guarda el id del OBJETO de Google Wallet generado para esta tarjeta.
+ * Sólo se usa al registrar (o cuando se llegue a crear el objeto).
+ */
+async function guardarObjetoGoogleWallet(id, objetoId) {
+  await execute('UPDATE tarjetas SET googleWalletObjetoId = ? WHERE id = ?', [
+    objetoId,
+    id,
+  ]);
+  return findByIdSafe(id);
+}
+
 module.exports = {
   COLUMNA_SAFE,
   findById,
@@ -110,4 +122,5 @@ module.exports = {
   lockForUpdate,
   updateSaldos,
   create,
+  guardarObjetoGoogleWallet,
 };

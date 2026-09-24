@@ -1,175 +1,107 @@
-# Wallet Club API — CONTRATO TEMPORAL (solo cambios nuevos)
+# Wallet Club API — CONTRATO TEMPORAL v1.2 (solo cambios nuevos)
 
 > **Fichero desechable.** Contiene ÚNICAMENTE la información que hay que
-> integrar en `API_CONTRACT.md` (v1.0 → v1.1). El contrato definitivo ya la
-> incluye; este fichero existe sólo para no tener que reenviar el documento
-> completo al equipo de front.
+> integrar en `API_CONTRACT.md` (v1.1 → **v1.2**): el enlace de Google Wallet
+> en el **registro de tarjeta** y el nuevo campo en los objetos `tarjeta`.
+> El contrato definitivo ya la incluye; este fichero existe sólo para no
+> tener que reenviar el documento completo al equipo de front.
 >
-> **Fecha:** 24/09/2026 · **Nuevo:** 1 endpoint (Google Wallet) + campos nuevos
-> en los objetos `comercio`.
+> *(El temporal anterior —clase de Google Wallet, v1.1— ya fue integrado.)*
+> **Fecha:** 24/09/2026
 
 ---
 
-## 1. Endpoint nuevo
+## 1. `POST /api/registro/tarjeta/:idRandomLargo` — respuesta `201` ampliada
 
-### `POST /api/admin/comercios/:idRandomLargo/google-wallet/clase`
-
-Alta de la **CLASE** (plantilla) de fidelización de un comercio en **Google
-Wallet**. Se crea **una sola clase por comercio**; todas las futuras tarjetas
-de Google Wallet de ese comercio apuntarán a ella.
-
-- **Rol:** **sólo `admin`** (token `Authorization: Bearer <JWT admin>`).
-  Cualquier otro rol → `403 FORBIDDEN_ROLE`; sin token → `401`.
-- **Qué NO hace:** no crea tarjetas/objetos individuales de Google Wallet
-  (ese endpoint no existe todavía).
-
-#### URL (path)
-
-| Parámetro | Tipo | Req. | Notas |
-|---|---|---|---|
-| `:idRandomLargo` | string (48 hex) | ✅ | Debe ser un comercio **existente**. Es además el **sufijo de la clase**: `classId = <ISSUER_ID>.<idRandomLargo>` |
-
-#### Body (JSON)
-
-| Campo | Tipo | Req. | Notas |
-|---|---|---|---|
-| `imgLogo` | URL **HTTPS** pública | ✅ | Logo del programa |
-| `imgHero` | URL **HTTPS** pública | ✗ | Banner grande de la tarjeta |
-| `imgModulo` | URL **HTTPS** pública | ✗ | Foto del módulo de imagen |
-| `hexBackgroundColor` | `#rgb` o `#rrggbb` | ✗ | **Si no se envía, el campo no se incluye y Google usa el color dominante de `imgHero`. Omitirlo NUNCA da error** (no hace falta ningún valor «anulador»; `""` sí daría error → enviar la cadena vacía cuenta como «no enviado») |
-| `terminosTexto` | string, 1–1000 | ✅ | Cuerpo del bloque «Términos» visible en la tarjeta. El **título** de ese bloque es fijo: `Términos` |
-| `reviewStatus` | `DRAFT` \| `UNDER_REVIEW` | ✗ (defecto `UNDER_REVIEW`) | `DRAFT` = en diseño (Google aún no admite crear tarjetas con ella); `UNDER_REVIEW` = lista para usar. Una vez fuera de `DRAFT` no se puede volver atrás |
-
-**Campos derivados automáticamente** (no se envían, no hay que pedirlos al usuario):
-
-- `issuerName` = `nombre` del comercio (p. ej. `Bar Reinol`)
-- `programName` = `"Fidelización " + nombre` (p. ej. `Fidelización Bar Reinol`)
-
-`clase.reviewStatus` de la respuesta es el estado **real** que devuelve Google
-(puede ser `approved` aunque se enviara `UNDER_REVIEW`).
-
-**Resto de la tarjeta** (etiquetas `Usuario`/`Cliente`, país `ES`, ids de
-módulos…) son fijos del servidor: no se envían ni se pueden variar por API.
-
-#### Respuestas
-
-**`201` — clase creada**
+No cambia la petición (**mismo body que siempre**: `nombre`, `email`,
+`password`), ni el `token`. Sólo **se añaden dos campos a la respuesta**:
 
 ```json
 {
   "ok": true,
-  "clase": {
-    "id": "3388000000023208299.5949aef4b6e7e66be2a4c04e0a723c92d618d6e3bcac6b43",
-    "reviewStatus": "UNDER_REVIEW",
-    "issuerName": "Café Central",
-    "programName": "Fidelización Café Central"
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "role": "tarjeta",
+  "usuario": {
+    "id": 8,
+    "nombre": "Prueba Wallet",
+    "email": "prueba.wallet@temp.com",
+    "comercioId": 5,
+    "puntos": 0,
+    "premios": 0,
+    "googleWalletObjetoId": "3388000000023208299.USER_8_COMERCIO_322bcbe4eb2e4f2322a16ed1f1cf259f7e8357940aaa62f5"
   },
-  "comercio": {
-    "id": 2,
-    "nombre": "Café Central",
-    "puntosPremio": 10,
-    "premioDescripcion": "Café gratis",
-    "activo": 1,
-    "idRandomLargo": "5949aef4b6e7e66be2a4c04e0a723c92d618d6e3bcac6b43",
-    "createdAt": "2026-09-24T09:00:00.000Z",
-    "updatedAt": "2026-09-24T09:00:00.000Z",
-    "googleWalletClaseId": "3388000000023208299.5949aef4b6e7e66be2a4c04e0a723c92d618d6e3bcac6b43",
-    "googleWalletClaseEstado": "UNDER_REVIEW",
-    "googleWalletClaseCreadaEn": "2026-09-24T09:00:00.000Z"
-  }
+  "comercio": { "id": 5, "nombre": "Chiringuito" },
+  "googleWalletUrl": "https://pay.google.com/gp/v/save/eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
 }
 ```
 
-**Errores nuevos**
+### `googleWalletUrl` (nuevo)
 
-| Código | HTTP | Cuándo / qué hace el front |
+| Valor | Cuándo | Qué hace el front |
 |---|---|---|
-| `GOOGLE_CLASE_YA_EXISTE` | **409** | La clase **ya existía** en Google (usuario que reenvía el formulario, o clase creada previamente). **El front debe conocer este conflicto**: mostrar el aviso con el `message` (que incluye el id y, si se pudo leer, el estado) y **no** reintentar en bucle. La clase queda guardada en el comercio |
-| `VALIDATION` | 400 | Falta `imgLogo` o `terminosTexto`, URL no `https://`, `hexBackgroundColor` mal formado o `reviewStatus` fuera del enum. El nombre del campo va dentro de `message` |
-| `COMERCIO_NOT_FOUND` | **404** | El `idRandomLargo` de la URL no corresponde a ningún comercio |
-| `GOOGLE_WALLET_400` | 400 | Google rechazó los datos construidos (p. ej. nombre del emisor demasiado largo). El `message` incluye el detalle de Google |
-| `GOOGLE_WALLET_PERMISOS` | 502 | La service account no tiene el rol GCP «Wallet Object Issuer» → **problema del servidor**, avisar al equipo backend |
-| `GOOGLE_WALLET_AUTH` | 502 | Google rechazó la autenticación → servidor |
-| `GOOGLE_WALLET_INDISPONIBLE` | 502 | Google no responde / error no previsto → **reintentable** |
-| `GOOGLE_WALLET_SIN_CONFIG` | 503 | Falta configuración en `.env` → servidor |
-| `UNAUTHORIZED` / `INVALID_TOKEN` | 401 | token ausente/caducado → login |
-| `FORBIDDEN_ROLE` | 403 | rol distinto de `admin` |
+| `string` (URL de Google) | El comercio **ya tiene clase creada** en Google Wallet y la clase no está en `DRAFT` | Mostrar el botón/enlace **«Guardar en Google Wallet»** en la pantalla de alta (abre `pay.google.com` y el usuario guarda la tarjeta) |
+| `null` | Comercio **sin clase creada**, clase en `DRAFT`, o falta configuración en el servidor | **El alta se completa igualmente** (no es un error). Se puede mostrar «este comercio aún no tiene tarjeta en Google Wallet» o directamente no mostrar nada |
 
-> Sólo se pintan como error de usuario: `VALIDATION`, `COMERCIO_NOT_FOUND`,
-> `GOOGLE_CLASE_YA_EXISTE` y `GOOGLE_WALLET_400`. Los `5xx` son del servidor.
+**Advertencias importantes para la interfaz:**
+
+- ⚠ La URL **no está vinculada a ninguna cuenta**: quien la abra se la guarda en
+  **su** Google Wallet. Devuélvela **sólo** al cliente que hizo el alta: no la
+  expongas en listados, no la registres en analíticas, no la imprimas en QR.
+- **No se puede recuperar después**: no existe endpoint que la vuelva a dar
+  (no está en `GET /api/tarjeta/perfil`). Si el usuario la pierde, hay que
+  darle de alta de nuevo o esperar a la fase de sincronización.
+- La URL es **siempre válida** mientras exista la clase; no caduca.
+
+### `usuario.googleWalletObjetoId` (nuevo campo)
+
+| Tipo | Significado |
+|---|---|
+| `string` o `null` | Id del objeto (tarjeta) en Google Wallet. `null` si no se generó enlace |
 
 ---
 
-## 2. Campos nuevos en los objetos `comercio`
+## 2. Campo nuevo en los objetos `tarjeta`
 
-Aparecen ya disponibles en:
+Aparece en **todas** las respuestas que devuelven tarjetas:
 
-- `GET /api/comercio/perfil` (§5.1)
-- `GET /api/admin/comercios` (§7.1)
-- `GET /api/admin/comercios/:id` (§7.2)
-- `POST /api/admin/comercios` (§7.3) y `PATCH /api/admin/comercios/:id` (§7.4)
-- dentro de la respuesta `comercio` del nuevo endpoint (§1)
+- `GET /api/tarjeta/perfil` (§4.1)
+- `GET /api/comercio/tarjetas` y `GET /api/comercio/tarjetas/:id` (§5.2, §5.3)
+- `GET /api/admin/tarjetas` y `GET /api/admin/tarjetas/:id` (§7.5, §7.6)
+- `tarjeta` de la respuesta de `POST .../movimiento` (§5.4)
+- `usuario` de login y registro de tarjeta (§3.4, §3.5)
 
 | Campo | Tipo | Significado |
 |---|---|---|
-| `googleWalletClaseId` | string o `null` | Id completo de la clase creada (`<ISSUER_ID>.<idRandomLargo>`). `null` = **aún no se ha creado** |
-| `googleWalletClaseEstado` | string o `null` | Estado **real** devuelto por Google en la última alta (p. ej. `DRAFT`, `UNDER_REVIEW`, `approved`…). `null` = sin clase o estado desconocido |
-| `googleWalletClaseCreadaEn` | string ISO 8601 o `null` | Momento en que se registró la clase en nuestra BD (sólo en `GET /api/admin/comercios/:id`) |
+| `googleWalletObjetoId` | string o `null` | Id del objeto en Google Wallet (`<issuerId>.USER_<idTarjeta>_COMERCIO_<idRandomLargo>`). `null` = esa tarjeta no tiene (todavía) objeto en Google Wallet |
 
-Los campos nuevos **no cambian** ninguno existente: los clientes que ya los
-usen no se ven afectados.
+Es de **sólo lectura** para el cliente: no se puede enviar en ninguna petición.
 
 ---
 
-## 3. Cambios en índices/enseñanzas globales del contrato
+## 3. Cambios en las secciones del contrato principal
 
-- **§1 Códigos HTTP:** se añaden `502` (Google Wallet no responde / rechaza) y
-  `503` (Google Wallet sin configurar).
-- **§8 Índice de `error.code`:** añadir las 6 filas nuevas de la tabla de
-  arriba (`GOOGLE_CLASE_YA_EXISTE`, `GOOGLE_WALLET_400`, `GOOGLE_WALLET_PERMISOS`,
-  `GOOGLE_WALLET_AUTH`, `GOOGLE_WALLET_INDISPONIBLE`, `GOOGLE_WALLET_SIN_CONFIG`).
-- **§9 Catálogo:** añadir la fila **19**:
-
-  | 19 | POST | `/api/admin/comercios/:idRandomLargo/google-wallet/clase` | admin |
-
-- **§10 «Lo que NO existe»:** añadir: ❌ creación de **instancias/tarjetas**
-  individuales en Google Wallet, ❌ `PATCH`/`DELETE` de una clase, ❌ endpoint de
-  lectura de clases. **Sólo existe el alta de clase.**
-- **§11 curl:**
-
-  ```bash
-  curl -s -X POST $BASE/api/admin/comercios/$ID_RANDOM/google-wallet/clase \
-    -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" \
-    -d '{"imgLogo":"https://ejemplo.com/logo.png",
-         "imgHero":"https://ejemplo.com/hero.png",
-         "imgModulo":"https://ejemplo.com/foto.png",
-         "hexBackgroundColor":"#0B57D0",
-         "terminosTexto":"1 punto por cada 1 € comprado.",
-         "reviewStatus":"UNDER_REVIEW"}'
-  ```
-
-- **§12 Checklist:** añadir: el alta de clase devuelve `201` con `clase.id`;
-  repetir el formulario devuelve `409 GOOGLE_CLASE_YA_EXISTE` y hay que
-  informarlo (no reintentar en bucle).
-- **Versión del contrato:** `1.0` → **`1.1`**.
+- **§1 · Tipos de datos:** añadir fila →
+  `googleWalletObjetoId`, `googleWalletClaseId` | string o `null` (ids de Google Wallet).
+- **§3.5 · Registro:** respuesta `201` con los dos campos nuevos y la tabla de
+  comportamiento de `googleWalletUrl` (puntos 1 arriba), incluida la advertencia
+  de que la URL sólo se devuelve ahí.
+- **§4.1, §5.2, §5.3, §7.5, §7.6:** los objetos `tarjeta` incluyen
+  `googleWalletObjetoId`.
+- **§12 · Checklist:** añadir → «El registro devuelve `googleWalletUrl`: si es
+  `string`, ofrecer «Guardar en Google Wallet»; si es `null`, completar el alta
+  sin más.»
+- **Versión del contrato:** `1.1` → **`1.2`**.
 
 ---
 
-## 4. Notas de integración para el formulario (web)
+## 4. Notas de integración
 
-1. El formulario es de **admin**: requiere login de admin como el resto de
-   `/api/admin/*`.
-2. El `idRandomLargo` se puede obtener de un selector de comercios
-   (`GET /api/admin/comercios`) — campo `idRandomLargo` de cada fila.
-3. Las tres imágenes deben ser URLs **HTTPS públicas** (Google las descarga):
-   sólo se aceptan `https://…`.
-4. `hexBackgroundColor` es **realmente opcional**: si el usuario lo deja en
-   blanco, no se envía el campo y Google colorea la tarjeta según el `imgHero`.
-5. Si el usuario no sabe qué `reviewStatus` poner → defecto `UNDER_REVIEW`.
-6. **Reenvíos:** si la misma clase se vuelve a enviar → `409
-   GOOGLE_CLASE_YA_EXISTE`. Mostrar «la clase ya existe» (el `message` trae el
-   id) y ofrecer cerrar o editar el comercio; el id también queda en
-   `GET /api/admin/comercios/:id` → `googleWalletClaseId`.
-7. Tras el `201`, el objeto `comercio` de la respuesta ya trae
-   `googleWalletClaseId`/`googleWalletClaseEstado` actualizados: sirve para
-   pintar el estado del formulario.
+1. **No hay endpoint nuevo**: sigue habiendo 19 endpoints; sólo cambia una
+   respuesta que ya existía.
+2. El QR que escanea el camarero (`barcode` del objeto) es
+   `<FRONT_URL>/comercio/captura/<idTarjeta>` — generado por el servidor, el
+   front no lo calcula ni lo envía.
+3. Puntos y premios del objeto se crean en `0` (como la tarjeta en nuestra BD);
+   la sincronización de saldos con Google Wallet es una **fase futura** (PATCH).
+4. Si el alta se hace desde un comercio **sin clase**, el mismo formulario de
+   registro sirve: `googleWalletUrl` será `null` y nada más cambia.

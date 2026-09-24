@@ -24,7 +24,7 @@ npm run admin -- miraadmin MiPassword123
 npm run dev     # o npm start
 
 # Comprobación funcional sin necesidad de BD (usa una BD en memoria simulada)
-npm run smoke   ->  66/66 comprobaciones OK
+npm run smoke   ->  73/73 comprobaciones OK
 ```
 
 Comprobar: `GET /health` → `{ ok: true, db: "conectada" }`
@@ -66,7 +66,7 @@ scripts/smoke.js        prueba funcional end-to-end (npm run smoke)
 |---|---|
 | `admins` | id, nombre, passwordHash, createdAt |
 | `comercios` | id, nombre, puntosPremio, premioDescripcion, activo, idRandomLargo, passwordHash, googleWalletClaseId, googleWalletClaseEstado, googleWalletClaseCreadaEn, createdAt, updatedAt |
-| `tarjetas` | id, comercioId, nombre, email, puntos, premios, passwordHash, activo, createdAt, updatedAt |
+| `tarjetas` | id, comercioId, nombre, email, puntos, premios, passwordHash, activo, googleWalletObjetoId, createdAt, updatedAt |
 | `operaciones` | id, tarjetaId, comercioId, tipo, puntosDelta, premiosDelta, descripcion, nombre, codigoCamarero, idempotenciaKey, createdAt |
 
 - `passwordHash` = bcrypt (10 rounds). La password plana nunca se guarda ni se devuelve.
@@ -82,7 +82,7 @@ scripts/smoke.js        prueba funcional end-to-end (npm run smoke)
 | POST | `/auth/admin/login` | `{ nombre, password }` → token rol `admin` |
 | POST | `/auth/comercio/login` | `{ password, idRandomLargo \| nombre }` → token rol `comercio` (exige `activo`) |
 | POST | `/auth/tarjeta/login` | `{ email, password, comercioId? }` → token rol `tarjeta` |
-| POST | `/registro/tarjeta/:idRandomLargo` | `{ nombre, email, password }` → **deduce la comercioId** y da de alta al cliente |
+| POST | `/registro/tarjeta/:idRandomLargo` | `{ nombre, email, password }` → **deduce la comercioId** y da de alta al cliente. Devuelve además `googleWalletUrl` (enlace «Añadir a Google Wallet», `null` si el comercio no tiene clase creada) |
 
 ### Tarjeta (token `tarjeta`; admin permitido)
 | GET | `/tarjeta/perfil` | Parámetros de la tarjeta (sin hash). Admin: `?tarjetaId=` |
@@ -170,12 +170,21 @@ Variables en `.env`:
 ```bash
 GOOGLE_WALLET_ISSUER_ID=...        # id de emisor: forma el CLASS_ID <issuerId>.<idRandomLargo>
 GOOGLE_WALLET_CREDENTIALS=...      # ruta al JSON de la service account (ignorado por git)
+FRONT_URL=...                      # URL base del front: QR = <FRONT_URL>/comercio/captura/<idTarjeta>
 ```
 
 - La service account necesita el rol GCP **«Wallet Object Issuer»**.
 - Si la clase ya existe → `409 GOOGLE_CLASE_YA_EXISTE`.
 - Si falta alguna de las dos variables → `503 GOOGLE_WALLET_SIN_CONFIG`
   (el resto de la API funciona igual).
+
+### Tarjetas (objetos) en Google Wallet
+
+Al registrarse un cliente, si el comercio **ya tiene clase creada**, la API
+devuelve además `googleWalletUrl` (enlace «Añadir a Google Wallet», firma local
+de un JWT `savetowallet`: no llama a Google) y guarda el id del objeto en
+`tarjetas.googleWalletObjetoId`. Si el comercio no tiene clase, o está en
+`DRAFT`, el alta se completa con `googleWalletUrl: null`.
 
 ## Respuestas
 

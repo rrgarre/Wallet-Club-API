@@ -59,6 +59,7 @@ const COLUMNAS_A_SEGURAS = [
   ['comercios', 'googleWalletClaseId', 'VARCHAR(128) NULL'],
   ['comercios', 'googleWalletClaseEstado', 'VARCHAR(32) NULL'],
   ['comercios', 'googleWalletClaseCreadaEn', 'TIMESTAMP NULL'],
+  ['tarjetas', 'googleWalletObjetoId', 'VARCHAR(128) NULL'],
 ];
 
 async function asegurarColumnas() {

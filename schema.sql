@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS tarjetas (
   premios      INT          NOT NULL DEFAULT 0,
   passwordHash VARCHAR(255) NOT NULL,
   activo       TINYINT(1)   NOT NULL DEFAULT 1,
+  -- Google Wallet: id del OBJETO (tarjeta) de este usuario en Google Wallet.
+  -- Se rellena al registrar cuando el comercio YA tiene clase creada.
+  googleWalletObjetoId VARCHAR(128) NULL,
   createdAt    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updatedAt    TIMESTAMP    NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
