@@ -5,7 +5,8 @@ const crypto = require('crypto');
 const { get, query, execute } = require('./connection');
 
 const COLUMNA_SAFE =
-  'id, nombre, puntosPremio, premioDescripcion, activo, idRandomLargo, createdAt, updatedAt';
+  'id, nombre, puntosPremio, premioDescripcion, activo, idRandomLargo, createdAt, updatedAt, ' +
+  'googleWalletClaseId, googleWalletClaseEstado, googleWalletClaseCreadaEn';
 
 /** idRandomLargo: 48 caracteres hex (difícil de adivinar, pero NO es autenticación). */
 function generarIdRandomLargo() {
@@ -89,6 +90,24 @@ async function update(id, campos) {
   return findById(id);
 }
 
+/**
+ * Guarda la CLASE de Google Wallet creada para este comercio.
+ * (Sólo el id y el estado: la clase vive en Google, aquí sólo se recuerda
+ *  a qué apuntarán las futuras tarjetas/objetos.)
+ * @param {number} id comercio.id
+ * @param {string} claseId  ej. 333333333333333.<idRandomLargo>
+ * @param {string|null} estado DRAFT | UNDER_REVIEW | ...
+ */
+async function guardarClaseGoogleWallet(id, claseId, estado = null) {
+  // googleWalletClaseCreadaEn se rellena SÓLO la primera vez (se conserva).
+  await execute(
+    'UPDATE comercios SET googleWalletClaseId = ?, googleWalletClaseEstado = ?, ' +
+      'googleWalletClaseCreadaEn = COALESCE(googleWalletClaseCreadaEn, CURRENT_TIMESTAMP) WHERE id = ?',
+    [claseId, estado, id]
+  );
+  return findByIdSafe(id);
+}
+
 module.exports = {
   generarIdRandomLargo,
   findById,
@@ -98,4 +117,5 @@ module.exports = {
   list,
   create,
   update,
+  guardarClaseGoogleWallet,
 };

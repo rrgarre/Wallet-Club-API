@@ -10,11 +10,30 @@ const { entero, texto } = require('../utils/validate');
 /** GET /api/comercio/perfil */
 async function perfil(req, res, next) {
   try {
-    const { id, nombre, puntosPremio, premioDescripcion, activo, idRandomLargo, createdAt } =
-      req.comercio;
+    const {
+      id,
+      nombre,
+      puntosPremio,
+      premioDescripcion,
+      activo,
+      idRandomLargo,
+      createdAt,
+      googleWalletClaseId,
+      googleWalletClaseEstado,
+    } = req.comercio;
     res.json({
       ok: true,
-      comercio: { id, nombre, puntosPremio, premioDescripcion, activo, idRandomLargo, createdAt },
+      comercio: {
+        id,
+        nombre,
+        puntosPremio,
+        premioDescripcion,
+        activo,
+        idRandomLargo,
+        createdAt,
+        googleWalletClaseId,
+        googleWalletClaseEstado,
+      },
     });
   } catch (err) {
     next(err);

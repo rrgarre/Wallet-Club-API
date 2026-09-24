@@ -29,6 +29,12 @@ const env = {
     String(process.env.EXIGIR_NOMBRE_SERVIDOR ?? 'true').trim()
   ),
   umbralPuntosNombre: num(process.env.UMBRAL_PUNTOS_NOMBRE, 100),
+
+  // Google Wallet (se validan al usar el endpoint, no al arrancar)
+  googleWallet: {
+    issuerId: process.env.GOOGLE_WALLET_ISSUER_ID || '',
+    credenciales: process.env.GOOGLE_WALLET_CREDENTIALS || '',
+  },
 };
 
 function validarEnv() {

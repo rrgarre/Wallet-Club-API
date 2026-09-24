@@ -28,6 +28,10 @@ CREATE TABLE IF NOT EXISTS comercios (
   activo            TINYINT(1)   NOT NULL DEFAULT 1,
   idRandomLargo     CHAR(48)     NOT NULL,
   passwordHash      VARCHAR(255) NOT NULL,
+  -- Google Wallet: id de la CLASE (plantilla) creada para el comercio
+  googleWalletClaseId       VARCHAR(128) NULL,
+  googleWalletClaseEstado   VARCHAR(32)  NULL,
+  googleWalletClaseCreadaEn TIMESTAMP    NULL,
   createdAt         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updatedAt         TIMESTAMP    NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),

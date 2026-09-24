@@ -24,7 +24,7 @@ npm run admin -- miraadmin MiPassword123
 npm run dev     # o npm start
 
 # Comprobación funcional sin necesidad de BD (usa una BD en memoria simulada)
-npm run smoke   ->  50/50 comprobaciones OK
+npm run smoke   ->  66/66 comprobaciones OK
 ```
 
 Comprobar: `GET /health` → `{ ok: true, db: "conectada" }`
@@ -51,7 +51,9 @@ src/
   services/
     movimientoService.js  lógica de negocio: atomicidad, idempotencia,
                           canje automático, premios negativos, camarero
-  controllers/          auth, tarjeta, comercio, admin
+    googleWalletService.js Google Wallet: token OAuth2 (service account)
+                          y alta de CLASE de fidelización (loyaltyClass)
+  controllers/          auth, tarjeta, comercio, admin, googleWallet
   routes/               público, tarjeta, comercio, admin
 scripts/createAdmin.js  alta/actualización de admin
 scripts/setupDb.js      instalación del esquema (npm run db:setup)
@@ -63,7 +65,7 @@ scripts/smoke.js        prueba funcional end-to-end (npm run smoke)
 | Tabla | Campos |
 |---|---|
 | `admins` | id, nombre, passwordHash, createdAt |
-| `comercios` | id, nombre, puntosPremio, premioDescripcion, activo, idRandomLargo, passwordHash, createdAt, updatedAt |
+| `comercios` | id, nombre, puntosPremio, premioDescripcion, activo, idRandomLargo, passwordHash, googleWalletClaseId, googleWalletClaseEstado, googleWalletClaseCreadaEn, createdAt, updatedAt |
 | `tarjetas` | id, comercioId, nombre, email, puntos, premios, passwordHash, activo, createdAt, updatedAt |
 | `operaciones` | id, tarjetaId, comercioId, tipo, puntosDelta, premiosDelta, descripcion, nombre, codigoCamarero, idempotenciaKey, createdAt |
 
@@ -96,6 +98,7 @@ scripts/smoke.js        prueba funcional end-to-end (npm run smoke)
 | GET | `/admin/comercios` · `/admin/comercios/:id` |
 | POST | `/admin/comercios` → genera `idRandomLargo` |
 | PATCH | `/admin/comercios/:id` (nombre, password, puntosPremio, premioDescripcion, activo) |
+| POST | `/admin/comercios/:idRandomLargo/google-wallet/clase` → alta de la **CLASE** de Google Wallet (sólo clase, no tarjetas) |
 | GET | `/admin/tarjetas?comercioId=` · `/admin/tarjetas/:id` |
 | GET | `/admin/operaciones?comercioId=&tarjetaId=&tipo=&desde=&hasta=&pagina=&tamano=` |
 
@@ -155,6 +158,24 @@ scripts/smoke.js        prueba funcional end-to-end (npm run smoke)
   Ponlo a `false` si quieres que sólo el front decida pedirlos.
 - `CAMARERO_CODIGOS=ANA-01,LUIS-02`: si se indica, el código se valida
   contra esa lista. Vacío = se acepta cualquier código (sólo se registra).
+
+## Google Wallet (clases de fidelización)
+
+`POST /api/admin/comercios/:idRandomLargo/google-wallet/clase` crea la
+**clase** (plantilla) del comercio en Google Wallet y guarda su id en
+`comercios.googleWalletClaseId`. **No** crea tarjetas individuales.
+
+Variables en `.env`:
+
+```bash
+GOOGLE_WALLET_ISSUER_ID=...        # id de emisor: forma el CLASS_ID <issuerId>.<idRandomLargo>
+GOOGLE_WALLET_CREDENTIALS=...      # ruta al JSON de la service account (ignorado por git)
+```
+
+- La service account necesita el rol GCP **«Wallet Object Issuer»**.
+- Si la clase ya existe → `409 GOOGLE_CLASE_YA_EXISTE`.
+- Si falta alguna de las dos variables → `503 GOOGLE_WALLET_SIN_CONFIG`
+  (el resto de la API funciona igual).
 
 ## Respuestas
 

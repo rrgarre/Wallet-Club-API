@@ -97,6 +97,15 @@ function run(sqlRaw, params = []) {
     t.updatedAt = new Date().toISOString();
     return { kind: 'result', result: { affectedRows: 1 } };
   }
+  if (/^UPDATE comercios SET googleWalletClaseId = \?/i.test(s)) {
+    const c = store.comercios.find((x) => x.id === params[2]);
+    if (!c) return { kind: 'result', result: { affectedRows: 0 } };
+    c.googleWalletClaseId = params[0];
+    c.googleWalletClaseEstado = params[1];
+    if (!c.googleWalletClaseCreadaEn) c.googleWalletClaseCreadaEn = new Date().toISOString();
+    c.updatedAt = new Date().toISOString();
+    return { kind: 'result', result: { affectedRows: 1 } };
+  }
   if (/^UPDATE comercios SET /i.test(s)) {
     const ini = s.indexOf(' SET ') + 5;
     const fin = s.indexOf(' WHERE id = ?');
@@ -341,6 +350,20 @@ function check(nombre, cond, extra = '') {
 async function main() {
   await seed();
 
+  // ---------------------------------------------------------------
+  // Stub del servicio de Google Wallet (no llamamos a Google de verdad)
+  // ---------------------------------------------------------------
+  const googleWalletStub = require('../src/services/googleWalletService');
+  const { env } = require('../src/config/env');
+  const ultimaLlamada = { params: null };
+  googleWalletStub.crearClase = async (params) => {
+    ultimaLlamada.params = params;
+    const claseId = `${env.googleWallet.issuerId}.${params.idRandomLargo}`;
+    if (global.__GW_YA_EXISTE) return { creada: false, claseId, clase: null };
+    return { creada: true, claseId, clase: { id: claseId, reviewStatus: params.reviewStatus } };
+  };
+  googleWalletStub.obtenerClase = async () => ({ reviewStatus: 'UNDER_REVIEW' });
+
   const app = require('../src/app');
   const server = app.listen(0);
   await new Promise((r) => server.once('listening', r));
@@ -579,6 +602,103 @@ async function main() {
   r = await req('GET', '/health');
   // 200 si hay BD; 503 si no está accesible (aquí no hay MySQL real)
   check('health responde', r.status === 200 || r.status === 503, `(${r.status})`);
+
+  // ---------------- GOOGLE WALLET (clase) ----------------
+  const CLASE_IDR = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6';
+  const crearClase = (idR, body, token) =>
+    req('POST', `/api/admin/comercios/${idR}/google-wallet/clase`, { body, token });
+  const claseBody = {
+    imgLogo: 'https://ejemplo.com/logo.png',
+    imgHero: 'https://ejemplo.com/hero.png',
+    imgModulo: 'https://ejemplo.com/foto.png',
+    hexBackgroundColor: '#0B57D0',
+    terminosTexto: '1 punto por cada 1 € comprado.',
+  };
+
+  r = await crearClase(CLASE_IDR, claseBody);
+  check('clase sin token -> 401', r.status === 401, `(${r.status})`);
+
+  r = await crearClase(CLASE_IDR, claseBody, tComercio);
+  check('rol comercio en ruta admin de clase -> 403', r.status === 403, `(${r.status})`);
+
+  r = await crearClase(CLASE_IDR, claseBody, tTarjeta);
+  check('rol tarjeta en ruta admin de clase -> 403', r.status === 403, `(${r.status})`);
+
+  r = await crearClase('no-existe', claseBody, tAdmin);
+  check('clase para idRandomLargo inexistente -> 404', r.status === 404 && r.json.error.code === 'COMERCIO_NOT_FOUND', `(${r.status})`);
+
+  r = await crearClase(CLASE_IDR, { ...claseBody, imgLogo: undefined }, tAdmin);
+  check('clase sin imgLogo -> 400 VALIDATION', r.status === 400 && r.json.error.code === 'VALIDATION', `(${r.status})`);
+
+  r = await crearClase(CLASE_IDR, { ...claseBody, imgLogo: 'http://inseguro.com/logo.png' }, tAdmin);
+  check('clase con imgLogo no-HTTPS -> 400', r.status === 400 && r.json.error.code === 'VALIDATION', `(${r.status})`);
+
+  r = await crearClase(CLASE_IDR, { ...claseBody, hexBackgroundColor: 'azul' }, tAdmin);
+  check('clase con color inválido -> 400', r.status === 400 && r.json.error.code === 'VALIDATION', `(${r.status})`);
+
+  r = await crearClase(CLASE_IDR, { ...claseBody, reviewStatus: 'LISTO' }, tAdmin);
+  check('clase con reviewStatus inválido -> 400', r.status === 400 && r.json.error.code === 'VALIDATION', `(${r.status})`);
+
+  r = await crearClase(CLASE_IDR, { imgLogo: claseBody.imgLogo, terminosTexto: '' }, tAdmin);
+  check('clase sin terminosTexto -> 400', r.status === 400 && r.json.error.code === 'VALIDATION', `(${r.status})`);
+
+  // Color NO enviado -> el campo se omite (Google usa el color del hero)
+  r = await crearClase(CLASE_IDR, { ...claseBody, hexBackgroundColor: undefined }, tAdmin);
+  check(
+    'clase creada sin hexBackgroundColor -> 201 y id = issuerId.idRandom',
+    r.status === 201 && r.json.clase.id === `${env.googleWallet.issuerId}.${CLASE_IDR}`,
+    `(${r.status}, id=${r.json?.clase?.id})`
+  );
+  check(
+    'el builder recibe el comercio y omite el color si no viene',
+    ultimaLlamada.params.comercio.nombre === 'Café Central' &&
+      ultimaLlamada.params.idRandomLargo === CLASE_IDR &&
+      ultimaLlamada.params.hexBackgroundColor === null
+  );
+  // Comprobación del constructor REAL (sin red): textos derivados del comercio
+  const cuerpoReal = googleWalletStub.construirClase({
+    comercio: store.comercios.find((c) => c.idRandomLargo === CLASE_IDR),
+    idRandomLargo: CLASE_IDR,
+    imgLogo: claseBody.imgLogo,
+    imgHero: null,
+    imgModulo: null,
+    hexBackgroundColor: null,
+    terminosTexto: claseBody.terminosTexto,
+    reviewStatus: 'UNDER_REVIEW',
+  });
+  check(
+    'construirClase: issuerName = nombre y programName = "Fidelización " + nombre',
+    cuerpoReal.issuerName === 'Café Central' &&
+      cuerpoReal.programName === 'Fidelización Café Central' &&
+      cuerpoReal.programLogo.sourceUri.uri === claseBody.imgLogo &&
+      !('hexBackgroundColor' in cuerpoReal) &&
+      !('heroImage' in cuerpoReal) &&
+      cuerpoReal.textModulesData[0].body === claseBody.terminosTexto
+  );
+  check(
+    'la clase creada se guarda en el comercio',
+    store.comercios.find((c) => c.idRandomLargo === CLASE_IDR)?.googleWalletClaseId ===
+      `${env.googleWallet.issuerId}.${CLASE_IDR}`,
+    `(claseId=${store.comercios.find((c) => c.idRandomLargo === CLASE_IDR)?.googleWalletClaseId})`
+  );
+  check(
+    'googleWalletClaseCreadaEn se rellena en la primera creación',
+    !!store.comercios.find((c) => c.idRandomLargo === CLASE_IDR)?.googleWalletClaseCreadaEn
+  );
+  check('en la respuesta va el comercio actualizado', !!r.json.comercio?.googleWalletClaseId, `(estado=${r.json?.comercio?.googleWalletClaseEstado})`);
+
+  r = await req('GET', '/api/admin/comercios/1', { token: tAdmin });
+  check('GET admin comercio expone googleWalletClaseId', r.status === 200 && 'googleWalletClaseId' in r.json.comercio, `(${r.status})`);
+
+  // Segundo envío del mismo formulario -> conflicto visible para el front
+  global.__GW_YA_EXISTE = true;
+  r = await crearClase(CLASE_IDR, claseBody, tAdmin);
+  check(
+    'clase repetida -> 409 GOOGLE_CLASE_YA_EXISTE',
+    r.status === 409 && r.json.error.code === 'GOOGLE_CLASE_YA_EXISTE' && r.json.error.message.includes(env.googleWallet.issuerId),
+    `(${r.status}, code=${r.json?.error?.code})`
+  );
+  global.__GW_YA_EXISTE = false;
 
   // ---------------- resumen ----------------
   const fallos = resultados.filter((x) => !x.ok);

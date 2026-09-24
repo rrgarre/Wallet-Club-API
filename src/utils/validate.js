@@ -53,6 +53,26 @@ function positivo(valor, campo, { requerido = true, defecto } = {}) {
   return n;
 }
 
+/** URL pública HTTPS (Google sólo descarga imágenes https://). */
+function urlHttps(valor, campo, { requerido = true, defecto = null } = {}) {
+  const v = texto(valor, campo, { requerido, defecto, max: 2048 });
+  if (v === null || v === undefined || v === '') return null;
+  if (!/^https:\/\/\S+$/i.test(v)) {
+    throw badRequest(`El campo '${campo}' debe ser una URL pública HTTPS (https://...)`, 'VALIDATION');
+  }
+  return v;
+}
+
+/** Color #rgb o #rrggbb. */
+function colorHex(valor, campo, { requerido = false, defecto = null } = {}) {
+  const v = texto(valor, campo, { requerido, defecto, max: 20 });
+  if (v === null || v === undefined || v === '') return null;
+  if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(v)) {
+    throw badRequest(`El campo '${campo}' debe tener formato #rgb o #rrggbb (ej. #0B57D0)`, 'VALIDATION');
+  }
+  return v;
+}
+
 function idParam(valor, campo = 'id') {
   const n = Number(valor);
   if (!Number.isInteger(n) || n <= 0) {
@@ -61,4 +81,4 @@ function idParam(valor, campo = 'id') {
   return n;
 }
 
-module.exports = { entero, texto, email, password, positivo, idParam };
+module.exports = { entero, texto, email, password, positivo, idParam, urlHttps, colorHex };

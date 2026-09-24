@@ -44,11 +44,35 @@ async function main() {
     await pool.query(s);
   }
 
+  // Migración sobre tablas YA existentes (CREATE TABLE IF NOT EXISTS no
+  // añade columnas nuevas a una tabla que ya está creada).
+  await asegurarColumnas();
+
   const [filas] = await pool.query('SHOW TABLES');
   const tablas = filas.map((f) => Object.values(f)[0]);
   console.log('Listo. Tablas en la BD:', tablas.join(', '));
 
   await pool.end();
+}
+
+const COLUMNAS_A_SEGURAS = [
+  ['comercios', 'googleWalletClaseId', 'VARCHAR(128) NULL'],
+  ['comercios', 'googleWalletClaseEstado', 'VARCHAR(32) NULL'],
+  ['comercios', 'googleWalletClaseCreadaEn', 'TIMESTAMP NULL'],
+];
+
+async function asegurarColumnas() {
+  for (const [tabla, columna, definicion] of COLUMNAS_A_SEGURAS) {
+    const [filas] = await pool.query(
+      `SELECT COUNT(*) AS n FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+      [tabla, columna]
+    );
+    if (Number(filas[0].n) === 0) {
+      await pool.query(`ALTER TABLE ${tabla} ADD COLUMN ${columna} ${definicion}`);
+      console.log(`  + columna ${tabla}.${columna}`);
+    }
+  }
 }
 
 main().catch(async (err) => {

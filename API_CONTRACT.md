@@ -1,9 +1,11 @@
 # Wallet Club API — Contrato de API
 
-> **Versión 1.0 · documento de interfaz.** Fuente de verdad para cualquier cliente
+> **Versión 1.1 · documento de interfaz.** Fuente de verdad para cualquier cliente
 > (web, móvil, panel, script). Todo lo que no esté documentado aquí **no existe**
 > y no debe asumirse. Los ejemplos de este documento son respuestas **reales**
 > capturadas del servidor en ejecución.
+> *v1.1: añadido el endpoint de alta de clase de Google Wallet (§7.9) y los
+> campos `googleWalletClaseId`/`googleWalletClaseEstado` de los comercios.*
 
 ---
 
@@ -54,8 +56,10 @@ Toda respuesta es JSON con una de estas dos formas:
 | `401` | Sin token, token caducado o inválido, credenciales incorrectas |
 | `403` | Rol insuficiente, comercio/tarjeta inactivo |
 | `404` | Recurso inexistente o que no pertenece al solicitante |
-| `409` | Conflicto (email duplicado, email ambiguo, idempotencia reutilizada) |
+| `409` | Conflicto (email duplicado, email ambiguo, idempotencia reutilizada, clase Google Wallet repetida) |
 | `500` | Error interno (`code: "INTERNAL"`) — reintentable |
+| `502` | Google Wallet no responde / rechaza la llamada (revisar `error.code`) |
+| `503` | Google Wallet sin configurar en el servidor |
 
 ### Tipos de datos
 
@@ -278,11 +282,15 @@ Historial propio (más recientes primero).
   "comercio": { "id": 2, "nombre": "Café Central", "puntosPremio": 10,
     "premioDescripcion": "Café gratis", "activo": 1,
     "idRandomLargo": "5949aef4b6e7e66be2a4c04e0a723c92d618d6e3bcac6b43",
-    "createdAt": "2026-09-23T06:53:26.000Z" }
+    "createdAt": "2026-09-23T06:53:26.000Z",
+    "googleWalletClaseId": "3388000000023208299.5949aef4b6e7e66be2a4c04e0a723c92d618d6e3bcac6b43",
+    "googleWalletClaseEstado": "UNDER_REVIEW" }
 }
 ```
 > **No incluye `passwordHash`.** El `idRandomLargo` se muestra aquí para que el
 > comercio pueda generar su QR de alta.
+> `googleWalletClaseId` / `googleWalletClaseEstado` son `null` **mientras no se
+> haya creado la clase de Google Wallet** para ese comercio (§7.9).
 
 ### 5.2 `GET /api/comercio/tarjetas`
 
@@ -452,10 +460,15 @@ hubiera cambiado levemente (si cambian los deltas → `409`).
 { "ok": true, "total": 1, "comercios": [
   { "id": 2, "nombre": "Café Central", "puntosPremio": 10,
     "premioDescripcion": "Café gratis", "activo": 1,
-    "idRandomLargo": "5949...", "createdAt": "...", "updatedAt": null } ] }
+    "idRandomLargo": "5949...", "createdAt": "...", "updatedAt": null,
+    "googleWalletClaseId": "3388000000023208299.5949...",
+    "googleWalletClaseEstado": "UNDER_REVIEW" } ] }
 ```
 
 ### 7.2 `GET /api/admin/comercios/:id` → `{ ok, comercio }` · `404 COMERCIO_NOT_FOUND`
+
+*(incluye también `googleWalletClaseId`, `googleWalletClaseEstado` y
+`googleWalletClaseCreadaEn`)*
 
 ### 7.3 `POST /api/admin/comercios`
 
@@ -520,6 +533,69 @@ GET /api/tarjeta/perfil?tarjetaId=2               con token admin   → 200
 GET /api/admin/operaciones                        con token comercio→ 403 FORBIDDEN_ROLE
 ```
 
+### 7.9 `POST /api/admin/comercios/:idRandomLargo/google-wallet/clase` ⭐
+
+Alta de la **CLASE** (plantilla del comercio) en Google Wallet. Crea UNA SOLA
+CLASE por comercio: todas sus futuras tarjetas de Google Wallet apuntarán a ella.
+**No crea tarjetas/objetos individuales** (eso no existe todavía).
+
+- **Rol:** sólo `admin`.
+- **URL:** el `:idRandomLargo` debe corresponder a un comercio existente. Es
+  además el **sufijo de la clase**: `classId = <GOOGLE_WALLET_ISSUER_ID>.<idRandomLargo>`.
+
+**Body**
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `imgLogo` | URL **HTTPS** pública | ✅ | logo del programa |
+| `imgHero` | URL **HTTPS** pública | ✗ | banner grande de la tarjeta |
+| `imgModulo` | URL **HTTPS** pública | ✗ | foto del módulo de imagen |
+| `hexBackgroundColor` | `#rgb` \| `#rrggbb` | ✗ | **Si NO se envía, el campo se omite y Google usa el color dominante de `imgHero`** (omitirlo nunca da error) |
+| `terminosTexto` | string ≤1000 | ✅ | cuerpo del bloque «Términos» (el título «Términos» es fijo) |
+| `reviewStatus` | `DRAFT` \| `UNDER_REVIEW` | ✗ (defecto `UNDER_REVIEW`) | `DRAFT` = en diseño, aún no admite tarjetas |
+
+Valores derivados automáticamente (no se envían): `issuerName` = nombre del
+comercio; `programName` = `"Fidelización " + nombre`.
+
+**`201` — clase creada**
+```json
+{
+  "ok": true,
+  "clase": {
+    "id": "3388000000023208299.5949aef4b6e7e66be2a4c04e0a723c92d618d6e3bcac6b43",
+    "reviewStatus": "UNDER_REVIEW",
+    "issuerName": "Café Central",
+    "programName": "Fidelización Café Central"
+  },
+  "comercio": { "id": 2, "...": "...", "googleWalletClaseId": "3388000000023208299.5949...",
+                "googleWalletClaseEstado": "UNDER_REVIEW" }
+}
+```
+El id queda guardado en el comercio: se puede leer después con
+`GET /api/admin/comercios/:id` o `GET /api/comercio/perfil`.
+
+**Errores específicos**
+
+| Código | HTTP | Cuándo / acción |
+|---|---|---|
+| `GOOGLE_CLASE_YA_EXISTE` | **409** | La clase ya estaba creada en Google. El `message` incluye el id y el estado. **El formulario debe informar de este conflicto** y, si procede, ofrecer «ya existe» en lugar de reintentar |
+| `VALIDATION` | 400 | Falta `imgLogo`/`terminosTexto`, URL no HTTPS, color mal formado, `reviewStatus` fuera del enum |
+| `COMERCIO_NOT_FOUND` | 404 | El `idRandomLargo` de la URL no corresponde a ningún comercio |
+| `GOOGLE_WALLET_400` | 400 | Google rechazó los datos (p. ej. `issuerName` demasiado largo); `message` con el detalle de Google |
+| `GOOGLE_WALLET_PERMISOS` | 502 | La service account no tiene el rol GCP «Wallet Object Issuer» |
+| `GOOGLE_WALLET_AUTH` | 502 | Google rechazó la autenticación |
+| `GOOGLE_WALLET_INDISPONIBLE` | 502 | Google no responde / error no previsto → reintentar |
+| `GOOGLE_WALLET_SIN_CONFIG` | 503 | Falta configuración en el servidor |
+| `UNAUTHORIZED` / `INVALID_TOKEN` | 401 | sin token o caducado |
+| `FORBIDDEN_ROLE` | 403 | rol distinto de `admin` |
+
+> `clase.reviewStatus` es el estado **real** que devuelve Google (p. ej.
+> `approved`, que puede diferir de lo que se envió). El valor guardado en
+> `googleWalletClaseEstado` es ese mismo estado real, leído en cada alta.
+
+> **No existe** (todavía) ningún endpoint para crear ni editar la clase en
+> Google (PATCH), ni para crear las instancias/tarjetas individuales.
+
 ---
 
 ## 8. Índice de `error.code`
@@ -549,9 +625,14 @@ GET /api/admin/operaciones                        con token comercio→ 403 FORB
 | `NOT_FOUND` | 404 | Recurso genérico |
 | `EMAIL_AMBIGUO` | 409 | Repetir login con `comercioId` |
 | `IDEMPOTENCIA_CONFLICTO` | 409 | Clave de idempotencia reutilizada con otros datos |
+| `GOOGLE_CLASE_YA_EXISTE` | 409 | La clase de Google Wallet ya existe; informar al usuario |
 | `DUPLICATE` | 409 | Clave única duplicada (carrera) |
 | `ROUTE_NOT_FOUND` | 404 | URL incorrecta |
 | `INTERNAL` | 500 | Reintentar / avisar |
+| `GOOGLE_WALLET_PERMISOS` | 502 | Service account sin rol «Wallet Object Issuer» (problema del servidor) |
+| `GOOGLE_WALLET_AUTH` | 502 | Google rechazó la autenticación (problema del servidor) |
+| `GOOGLE_WALLET_INDISPONIBLE` | 502 | Google no responde → se puede reintentar |
+| `GOOGLE_WALLET_SIN_CONFIG` | 503 | Falta `.env` de Google Wallet (problema del servidor) |
 | `COMERCIO_NOT_FOUND` (registro) | 400 | `idRandomLargo` desconocido |
 
 ---
@@ -578,6 +659,7 @@ GET /api/admin/operaciones                        con token comercio→ 403 FORB
 | 16 | GET | `/api/admin/tarjetas` | admin |
 | 17 | GET | `/api/admin/tarjetas/:id` | admin |
 | 18 | GET | `/api/admin/operaciones` | admin |
+| 19 | POST | `/api/admin/comercios/:idRandomLargo/google-wallet/clase` | admin |
 
 ---
 
@@ -595,6 +677,9 @@ GET /api/admin/operaciones                        con token comercio→ 403 FORB
   `comercioId` en admin), ni paginación en `/api/comercio/tarjetas`.
 - ❌ Edición o borrado de operaciones (el libro de movimientos es inmutable).
 - ❌ Endpoints de ficheros, notificaciones push, websockets o webhooks.
+- ❌ **Google Wallet**: no existe creación de **instancias/tarjetas** (objetos
+  individuales), ni `PATCH`/`DELETE` de una clase, ni endpoint de lectura de
+  clases. Sólo existe el alta de **clase** (§7.9).
 
 ---
 
@@ -639,6 +724,16 @@ curl -s -X POST $BASE/api/comercio/tarjetas/2/movimiento \
 # Operaciones con filtros y paginación
 curl -s "$BASE/api/admin/operaciones?comercioId=2&pagina=1&tamano=20" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# Crear la CLASE de Google Wallet de un comercio
+curl -s -X POST $BASE/api/admin/comercios/$ID_RANDOM/google-wallet/clase \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"imgLogo":"https://ejemplo.com/logo.png",
+       "imgHero":"https://ejemplo.com/hero.png",
+       "imgModulo":"https://ejemplo.com/foto.png",
+       "hexBackgroundColor":"#0B57D0",
+       "terminosTexto":"1 punto por cada 1 € comprado.",
+       "reviewStatus":"UNDER_REVIEW"}'
 ```
 
 ---
@@ -650,4 +745,7 @@ curl -s "$BASE/api/admin/operaciones?comercioId=2&pagina=1&tamano=20" \
 - [ ] Un token de comercio con `activo=0` recibe `403 COMERCIO_INACTIVO`.
 - [ ] Una misma `Idempotency-Key` reenviada devuelve `duplicado: true` y el
       saldo no cambia.
+- [ ] El alta de clase de Google Wallet devuelve `201` con `clase.id`, y un
+      segundo envío del mismo formulario devuelve `409 GOOGLE_CLASE_YA_EXISTE`
+      (mostrar el conflicto, no reintentar en bucle).
 - [ ] `error.message` se puede pintar directamente en la interfaz.
