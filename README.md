@@ -24,7 +24,7 @@ npm run admin -- miraadmin MiPassword123
 npm run dev     # o npm start
 
 # Comprobación funcional sin necesidad de BD (usa una BD en memoria simulada)
-npm run smoke   ->  73/73 comprobaciones OK
+npm run smoke   ->  79/79 comprobaciones OK
 ```
 
 Comprobar: `GET /health` → `{ ok: true, db: "conectada" }`

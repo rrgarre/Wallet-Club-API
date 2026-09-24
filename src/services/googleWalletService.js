@@ -27,6 +27,11 @@ const SCOPE = 'https://www.googleapis.com/auth/wallet_object.issuer';
 
 const URL_TOKEN = 'https://oauth2.googleapis.com/token';
 const URL_CLASE = 'https://walletobjects.googleapis.com/walletobjects/v1/loyaltyClass';
+const URL_OBJETO = 'https://walletobjects.googleapis.com/walletobjects/v1/loyaltyObject';
+
+// Timeout de las llamadas a Google (para no bloquear al camarero):
+// si Google no contesta en 10 s, se considera error de sincronización.
+const TIMEOUT_GOOGLE_MS = 10000;
 
 // ID de emisor de ejemplo genérico; el valor real vive en .env
 // (GOOGLE_WALLET_ISSUER_ID) y de ahí se coge SIEMPRE. El CLASS_ID se
@@ -408,6 +413,72 @@ function claseAdmiteTarjetas(estado) {
   return String(estado).trim().toLowerCase() !== 'draft';
 }
 
+// =====================================================================
+//  ACTUALIZACIÓN DE SALDOS (siguiente fase) — PATCH loyaltyObject
+// ---------------------------------------------------------------------
+//  La tarjeta sólo existe en Google cuando el usuario ha abierto el
+//  enlace y la ha guardado. A partir de ahí, cada cambio de puntos o
+//  premios en nuestra BD se refleja con un PATCH de los dos contadores.
+//
+//  updateMask: sólo se tocan esos dos campos; el resto de la tarjeta
+//  (classId, barcode, state...) queda intacto.
+// =====================================================================
+
+/**
+ * PATCH loyaltyObject/{id} — sincroniza puntos y premios con Google Wallet.
+ *
+ * @param {object} p
+ * @param {string} p.objectId tarjetas.googleWalletObjetoId
+ * @param {number} p.puntos   saldo nuevo de puntos
+ * @param {number} p.premios  saldo nuevo de premios
+ * @returns {Promise<'sincronizado'|'sin_objeto'>}
+ *   - 'sincronizado' → Google confirmó (200)
+ *   - 'sin_objeto'   → 404: el usuario todavía no ha guardado la tarjeta
+ * Lanza AppError(502) para el resto (el llamante decide qué hacer).
+ */
+async function actualizarSaldos({ objectId, puntos, premios }) {
+  const token = await obtenerToken();
+
+  const cuerpo = {
+    loyaltyPoints: { label: 'Puntos', balance: { int: Number(puntos) || 0 } },
+    secondaryLoyaltyPoints: { label: 'Premios', balance: { int: Number(premios) || 0 } },
+  };
+
+  const control = new AbortController();
+  const reloj = setTimeout(() => control.abort(), TIMEOUT_GOOGLE_MS);
+
+  let respuesta;
+  try {
+    respuesta = await fetch(
+      `${URL_OBJETO}/${encodeURIComponent(objectId)}?updateMask=loyaltyPoints,secondaryLoyaltyPoints`,
+      {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(cuerpo),
+        signal: control.signal,
+      }
+    );
+  } catch (err) {
+    throw new AppError(
+      502,
+      `Google Wallet no respondió al actualizar la tarjeta (${err.name}): ${err.message}`,
+      'GOOGLE_WALLET_INDISPONIBLE'
+    );
+  } finally {
+    clearTimeout(reloj);
+  }
+
+  if (respuesta.status === 404) {
+    // El usuario aún no ha guardado la tarjeta en su Wallet: no hay nada que actualizar.
+    return 'sin_objeto';
+  }
+
+  const datos = await respuesta.json().catch(() => ({}));
+  if (!respuesta.ok) throw errorDeGoogle(respuesta.status, datos);
+
+  return 'sincronizado';
+}
+
 module.exports = {
   SCOPE,
   configuracion,
@@ -421,4 +492,5 @@ module.exports = {
   qrDeTarjeta,
   generarEnlaceTarjeta,
   claseAdmiteTarjetas,
+  actualizarSaldos,
 };

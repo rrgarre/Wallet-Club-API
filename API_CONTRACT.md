@@ -1,6 +1,6 @@
 # Wallet Club API — Contrato de API
 
-> **Versión 1.2 · documento de interfaz.** Fuente de verdad para cualquier cliente
+> **Versión 1.3 · documento de interfaz.** Fuente de verdad para cualquier cliente
 > (web, móvil, panel, script). Todo lo que no esté documentado aquí **no existe**
 > y no debe asumirse. Los ejemplos de este documento son respuestas **reales**
 > capturadas del servidor en ejecución.
@@ -8,6 +8,8 @@
 > campos `googleWalletClaseId`/`googleWalletClaseEstado` de los comercios.*
 > *v1.2: el registro de tarjeta devuelve `googleWalletUrl` (enlace «Añadir a
 > Google Wallet») y los objetos tarjeta incluyen `googleWalletObjetoId`.*
+> *v1.3: el movimiento de puntos/premios devuelve `googleWallet`, resultado de
+> la sincronización de los saldos con Google Wallet (§5.4).*
 
 ---
 
@@ -362,6 +364,7 @@ También se acepta `comercioId` en el body **sólo si el token es de admin**.
   "idConversion": 6,
   "conversion": { "n": 2, "umbral": 10, "puntosDescontados": 20 },
   "requiereNombre": false,
+  "googleWallet": "sincronizado",
   "tarjeta": { "id": 2, "comercioId": 2, "nombre": "Luis Captura",
     "email": "luis.cap@ejemplo.com", "puntos": 5, "premios": 2, "activo": 1,
     "createdAt": "...", "updatedAt": "..." }
@@ -369,6 +372,19 @@ También se acepta `comercioId` en el body **sólo si el token es de admin**.
 ```
 - **`tarjeta` es el saldo ya actualizado**: el cliente debe refrescar su estado
   con este objeto, sin necesidad de otra llamada.
+- **`googleWallet`** (v1.3) es el resultado de llevar esos saldos a Google
+  Wallet **después** de aplicar el movimiento. Siempre está presente
+  (también en el `200` de duplicado):
+
+  | Valor | Significado | Sugerencia de interfaz |
+  |---|---|---|
+  | `"sincronizado"` | Google confirmó el PATCH de los saldos | Nada que hacer |
+  | `"sin_objeto"` | La tarjeta tiene enlace pero el usuario **aún no la ha guardado** en su Wallet (Google devuelve 404) | Nada que hacer (es lo normal hasta que la guarde) |
+  | `"error"` | Google no respondió / falló. **El movimiento en nuestra BD sí se aplicó** (fuente de verdad) | Aviso discreto: «Guardado; reintentaremos la sincronización con Google Wallet». El próximo movimiento (o un reintento idempotente) la pone al día |
+  | `null` | La tarjeta **no tiene enlace** de Google Wallet (nunca se generó) | No mostrar nada |
+
+  ⚠ **Nunca** se debe bloquear ni reintentar el movimiento por este campo: la
+  BD local es siempre la fuente de verdad.
 - `conversion` no es `null` cuando la acumulación desencadenó canje automático:
   `n` = premios ganados, `umbral` = `puntosPremio` del comercio,
   `puntosDescontados` = `n * umbral`. En ese caso `idConversion` es el id de la
@@ -774,4 +790,7 @@ curl -s -X POST $BASE/api/admin/comercios/$ID_RANDOM/google-wallet/clase \
       (mostrar el conflicto, no reintentar en bucle).
 - [ ] El registro devuelve `googleWalletUrl`: si es `string`, ofrecer «Guardar
       en Google Wallet» al usuario; si es `null`, completar el alta sin más.
+- [ ] El movimiento devuelve `googleWallet`: `sincronizado`/`sin_objeto` no
+      requieren nada; `error` avisa sin reintentar el movimiento (la BD ya está
+      bien); `null` = la tarjeta no tiene enlace (no mostrar nada).
 - [ ] `error.message` se puede pintar directamente en la interfaz.

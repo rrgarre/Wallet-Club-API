@@ -376,6 +376,14 @@ async function main() {
     objectId: `${env.googleWallet.issuerId}.USER_${tarjeta.id}_COMERCIO_${comercio.idRandomLargo}`,
     qrUrl: env.frontUrl ? `${env.frontUrl}/comercio/captura/${tarjeta.id}` : '',
   });
+  // PATCH de saldos: sin red; controlable con globals para los tests
+  global.__ULTIMA_SYNC = null;
+  googleWalletStub.actualizarSaldos = async ({ objectId, puntos, premios }) => {
+    global.__ULTIMA_SYNC = { objectId, puntos, premios };
+    if (global.__GW_SYNC_FALLO) throw new Error('falso: Google no responde');
+    if (global.__GW_SYNC_SIN_OBJETO) return 'sin_objeto';
+    return 'sincronizado';
+  };
 
   const app = require('../src/app');
   const server = app.listen(0);
@@ -794,6 +802,63 @@ async function main() {
   } else {
     check('builder real: (omitido, faltan GOOGLE_WALLET_ISSUER_ID / FRONT_URL en .env)', true);
   }
+
+  // ---------------- SINCRONIZACIÓN DE SALDOS (PATCH a Google) ----------------
+  const idWallet = nuevaWallet.usuario.id; // tarjeta CON objeto de Google
+  const movGw = (id, body, token = tComercio) =>
+    req('POST', `/api/comercio/tarjetas/${id}/movimiento`, { body, token });
+
+  // Tarjeta SIN objeto de Google (la primera, 'Luis')
+  r = await movGw(1, { puntosDelta: 1, premiosDelta: 0, idempotencia: 'gw-004' });
+  check(
+    'tarjeta sin googleWalletObjetoId -> googleWallet null',
+    r.status === 201 && r.json.googleWallet === null,
+    `(${r.status}, gw=${r.json?.googleWallet})`
+  );
+
+  // Tarjeta CON objeto: sincronización correcta
+  r = await movGw(idWallet, { puntosDelta: 3, premiosDelta: 0, idempotencia: 'gw-001' });
+  check(
+    'movimiento con objeto en Wallet -> googleWallet "sincronizado"',
+    r.status === 201 && r.json.googleWallet === 'sincronizado',
+    `(${r.status}, gw=${r.json?.googleWallet})`
+  );
+  check(
+    'el PATCH lleva el objectId y los saldos NUEVOS',
+    global.__ULTIMA_SYNC &&
+      global.__ULTIMA_SYNC.objectId === nuevaWallet.usuario.googleWalletObjetoId &&
+      global.__ULTIMA_SYNC.puntos === 3 &&
+      global.__ULTIMA_SYNC.premios === 0,
+    JSON.stringify(global.__ULTIMA_SYNC)
+  );
+
+  // Google caído: el movimiento se aplica igual y se informa 'error'
+  global.__GW_SYNC_FALLO = true;
+  r = await movGw(idWallet, { puntosDelta: 3, premiosDelta: 0, idempotencia: 'gw-002' });
+  check(
+    'Google no responde -> movimiento 201 y googleWallet "error"',
+    r.status === 201 && r.json.googleWallet === 'error' && r.json.tarjeta.puntos === 6,
+    `(${r.status}, gw=${r.json?.googleWallet}, p=${r.json?.tarjeta?.puntos})`
+  );
+  global.__GW_SYNC_FALLO = false;
+
+  // El usuario todavía no ha guardado la tarjeta -> 404 de Google
+  global.__GW_SYNC_SIN_OBJETO = true;
+  r = await movGw(idWallet, { puntosDelta: 1, premiosDelta: 0, idempotencia: 'gw-003' });
+  check(
+    'objeto aún no guardado por el usuario -> googleWallet "sin_objeto"',
+    r.status === 201 && r.json.googleWallet === 'sin_objeto',
+    `(${r.status}, gw=${r.json?.googleWallet})`
+  );
+  global.__GW_SYNC_SIN_OBJETO = false;
+
+  // Reintento idempotente: también intenta resincronizar (auto-sanación)
+  r = await movGw(idWallet, { puntosDelta: 3, premiosDelta: 0, idempotencia: 'gw-001' });
+  check(
+    'reintento duplicado -> 200 con googleWallet (reintento de sync)',
+    r.status === 200 && r.json.duplicado === true && r.json.googleWallet === 'sincronizado',
+    `(${r.status}, gw=${r.json?.googleWallet})`
+  );
 
   // ---------------- resumen ----------------
   const fallos = resultados.filter((x) => !x.ok);

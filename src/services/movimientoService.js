@@ -20,8 +20,35 @@ const dbOperaciones = require('../db/operaciones');
 const { withTransaction } = require('../db/connection');
 const { env } = require('../config/env');
 const { AppError, badRequest, notFound, conflict } = require('../utils/errors');
+const googleWallet = require('./googleWalletService');
 
 const TIPOS_VALIDOS = ['acumulacion', 'canje', 'correccion', 'ajuste'];
+
+/**
+ * Sincroniza los saldos con Google Wallet DESPUÉS del COMMIT.
+ *
+ * Nunca revierte ni bloquea el movimiento: si Google falla, la BD ya es
+ * la fuente de verdad y sólo se marca 'error' para que el cliente lo vea.
+ *
+ * @param {object} tarjeta con googleWalletObjetoId / puntos / premios
+ * @returns {Promise<'sincronizado'|'sin_objeto'|'error'|null>}
+ *   null = la tarjeta no tiene (nunca tuvo) enlace de Google Wallet
+ */
+async function sincronizarGoogleWallet(tarjeta) {
+  const objectId = tarjeta?.googleWalletObjetoId;
+  if (!objectId) return null;
+  try {
+    return await googleWallet.actualizarSaldos({
+      objectId,
+      puntos: tarjeta.puntos,
+      premios: tarjeta.premios,
+    });
+  } catch (err) {
+    // El movimiento ya está aplicado: no se propaga el error, sólo se informa.
+    console.error(`[google-wallet] fallo al sincronizar ${objectId}: ${err.message}`);
+    return 'error';
+  }
+}
 
 /** Tipo por defecto según los deltas. */
 function tipoPorDefecto(puntosDelta, premiosDelta) {
@@ -144,7 +171,7 @@ async function aplicarMovimiento(p) {
 
   // --- 2) Transacción atómica --------------------------------------------
   try {
-    return await withTransaction(async (conn) => {
+    const resultado = await withTransaction(async (conn) => {
       // Bloqueo de la tarjeta: serializa movimientos concurrentes.
       const tarjeta = await dbTarjetas.lockForUpdate(conn, tarjetaId, comercioId);
       if (!tarjeta) {
@@ -225,6 +252,11 @@ async function aplicarMovimiento(p) {
         tarjeta: sanearTarjeta({ ...tarjeta, puntos: nuevosPuntos, premios: nuevosPremios }),
       };
     });
+
+    // --- 3) Tras el COMMIT: llevar los saldos a Google Wallet -------------
+    //     (fuera de la transacción: un fallo de Google NO revierte nada)
+    resultado.googleWallet = await sincronizarGoogleWallet(resultado.tarjeta);
+    return resultado;
   } catch (err) {
     // Carrera entre dos reintentos simultáneos: gana uno, el otro entra aquí.
     if (err && err.code === 'ER_DUP_ENTRY' && idempotencia) {
@@ -240,7 +272,7 @@ async function aplicarMovimiento(p) {
 
 async function respuestaDuplicada(operacion, tarjeta) {
   const historial = await dbOperaciones.listByTarjeta(operacion.tarjetaId, 100);
-  return {
+  const respuesta = {
     ok: true,
     duplicado: true,
     mensaje: 'Operación ya registrada previamente: no se ha aplicado de nuevo',
@@ -249,11 +281,16 @@ async function respuestaDuplicada(operacion, tarjeta) {
     tarjeta: sanearTarjeta(tarjeta),
     historial,
   };
+  // Reintento: el saldo no cambia, pero si la sincronización anterior falló,
+  // ésta es una oportunidad de ponerse al día (mismos valores = inocua).
+  respuesta.googleWallet = await sincronizarGoogleWallet(respuesta.tarjeta);
+  return respuesta;
 }
 
 module.exports = {
   aplicarMovimiento,
   requiereNombreOperacion,
   tipoPorDefecto,
+  sincronizarGoogleWallet,
   TIPOS_VALIDOS,
 };

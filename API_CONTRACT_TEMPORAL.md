@@ -1,107 +1,85 @@
-# Wallet Club API — CONTRATO TEMPORAL v1.2 (solo cambios nuevos)
+# Wallet Club API — CONTRATO TEMPORAL v1.3 (solo cambios nuevos)
 
 > **Fichero desechable.** Contiene ÚNICAMENTE la información que hay que
-> integrar en `API_CONTRACT.md` (v1.1 → **v1.2**): el enlace de Google Wallet
-> en el **registro de tarjeta** y el nuevo campo en los objetos `tarjeta`.
+> integrar en `API_CONTRACT.md` (v1.2 → **v1.3**): el campo `googleWallet` en
+> la respuesta de **movimiento de puntos/premios** (sincronización con
+> Google Wallet).
 > El contrato definitivo ya la incluye; este fichero existe sólo para no
 > tener que reenviar el documento completo al equipo de front.
 >
-> *(El temporal anterior —clase de Google Wallet, v1.1— ya fue integrado.)*
+> *(Los temporales anteriores —clase v1.1 y registro/enlace v1.2— ya fueron
+> integrados.)*
 > **Fecha:** 24/09/2026
 
 ---
 
-## 1. `POST /api/registro/tarjeta/:idRandomLargo` — respuesta `201` ampliada
+## 1. `POST /api/comercio/tarjetas/:id/movimiento` — campo nuevo `googleWallet`
 
-No cambia la petición (**mismo body que siempre**: `nombre`, `email`,
-`password`), ni el `token`. Sólo **se añaden dos campos a la respuesta**:
+**No cambia la petición** (mismo body: `puntosDelta`, `premiosDelta`,
+`tipo`, `nombre`, `codigoCamarero`, `idempotencia`, …) ni ningún otro campo
+de la respuesta. **Se añade un campo nuevo** tanto al `201` (movimiento
+aplicado) como al `200` (`duplicado: true`):
 
 ```json
 {
   "ok": true,
-  "token": "eyJhbGciOiJIUzI1NiIs...",
-  "role": "tarjeta",
-  "usuario": {
-    "id": 8,
-    "nombre": "Prueba Wallet",
-    "email": "prueba.wallet@temp.com",
-    "comercioId": 5,
-    "puntos": 0,
-    "premios": 0,
-    "googleWalletObjetoId": "3388000000023208299.USER_8_COMERCIO_322bcbe4eb2e4f2322a16ed1f1cf259f7e8357940aaa62f5"
-  },
-  "comercio": { "id": 5, "nombre": "Chiringuito" },
-  "googleWalletUrl": "https://pay.google.com/gp/v/save/eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+  "duplicado": false,
+  "idOperacion": 5,
+  "idConversion": null,
+  "conversion": null,
+  "requiereNombre": false,
+  "googleWallet": "sincronizado",
+  "tarjeta": { "id": 2, "...": "saldo ya actualizado" }
 }
 ```
 
-### `googleWalletUrl` (nuevo)
+### Qué significa cada valor
 
-| Valor | Cuándo | Qué hace el front |
+| Valor | Cuándo ocurre | Qué hacer en la interfaz |
 |---|---|---|
-| `string` (URL de Google) | El comercio **ya tiene clase creada** en Google Wallet y la clase no está en `DRAFT` | Mostrar el botón/enlace **«Guardar en Google Wallet»** en la pantalla de alta (abre `pay.google.com` y el usuario guarda la tarjeta) |
-| `null` | Comercio **sin clase creada**, clase en `DRAFT`, o falta configuración en el servidor | **El alta se completa igualmente** (no es un error). Se puede mostrar «este comercio aún no tiene tarjeta en Google Wallet» o directamente no mostrar nada |
+| `"sincronizado"` | Google confirmó el `PATCH` de los saldos (puntos y premios del objeto) | Nada |
+| `"sin_objeto"` | La tarjeta tiene enlace, pero el usuario **aún no la ha guardado** en su Google Wallet (Google responde 404) | Nada: es el estado normal hasta que el usuario pulse «Guardar en Google Wallet» |
+| `"error"` | Google no contestó o falló (timeout 10 s, 5xx…). **El movimiento en nuestra BD SÍ se aplicó** | Aviso discreto, p. ej. «Guardado. Reintentaremos la sincronización con Google Wallet». **No** reintentar el movimiento: se pone solo al día con el próximo movimiento o con un reintento idempotente |
+| `null` | La tarjeta **no tiene enlace** de Google Wallet (su comercio no tiene clase aprobada) | No mostrar nada |
 
-**Advertencias importantes para la interfaz:**
+### Advertencias importantes
 
-- ⚠ La URL **no está vinculada a ninguna cuenta**: quien la abra se la guarda en
-  **su** Google Wallet. Devuélvela **sólo** al cliente que hizo el alta: no la
-  expongas en listados, no la registres en analíticas, no la imprimas en QR.
-- **No se puede recuperar después**: no existe endpoint que la vuelva a dar
-  (no está en `GET /api/tarjeta/perfil`). Si el usuario la pierde, hay que
-  darle de alta de nuevo o esperar a la fase de sincronización.
-- La URL es **siempre válida** mientras exista la clase; no caduca.
-
-### `usuario.googleWalletObjetoId` (nuevo campo)
-
-| Tipo | Significado |
-|---|---|
-| `string` o `null` | Id del objeto (tarjeta) en Google Wallet. `null` si no se generó enlace |
-
----
-
-## 2. Campo nuevo en los objetos `tarjeta`
-
-Aparece en **todas** las respuestas que devuelven tarjetas:
-
-- `GET /api/tarjeta/perfil` (§4.1)
-- `GET /api/comercio/tarjetas` y `GET /api/comercio/tarjetas/:id` (§5.2, §5.3)
-- `GET /api/admin/tarjetas` y `GET /api/admin/tarjetas/:id` (§7.5, §7.6)
-- `tarjeta` de la respuesta de `POST .../movimiento` (§5.4)
-- `usuario` de login y registro de tarjeta (§3.4, §3.5)
-
-| Campo | Tipo | Significado |
-|---|---|---|
-| `googleWalletObjetoId` | string o `null` | Id del objeto en Google Wallet (`<issuerId>.USER_<idTarjeta>_COMERCIO_<idRandomLargo>`). `null` = esa tarjeta no tiene (todavía) objeto en Google Wallet |
-
-Es de **sólo lectura** para el cliente: no se puede enviar en ninguna petición.
+- ⚠ **La BD local es la fuente de verdad.** Este campo es sólo informativo:
+  **nunca** hay que bloquear, rechazar ni repetir el movimiento en función
+  de su valor (ni en el `201` ni en el `200`).
+- La sincronización se lanza **después** del `COMMIT`, con timeout de 10 s:
+  el tiempo de respuesta del movimiento puede aumentar unos milisegundos.
+- En el caso `duplicado: true` (reintento con la misma `idempotencia`) el
+  campo también aparece: se reenvía el mismo saldo como oportunidad de
+  «auto-sanación» si la sincronización anterior falló. El saldo **no** cambia.
+- Los valores de `tarjeta.puntos` y `tarjeta.premios` de la respuesta son
+  exactamente los que se envían a Google.
 
 ---
 
-## 3. Cambios en las secciones del contrato principal
+## 2. Cambios en las secciones del contrato principal
 
-- **§1 · Tipos de datos:** añadir fila →
-  `googleWalletObjetoId`, `googleWalletClaseId` | string o `null` (ids de Google Wallet).
-- **§3.5 · Registro:** respuesta `201` con los dos campos nuevos y la tabla de
-  comportamiento de `googleWalletUrl` (puntos 1 arriba), incluida la advertencia
-  de que la URL sólo se devuelve ahí.
-- **§4.1, §5.2, §5.3, §7.5, §7.6:** los objetos `tarjeta` incluyen
-  `googleWalletObjetoId`.
-- **§12 · Checklist:** añadir → «El registro devuelve `googleWalletUrl`: si es
-  `string`, ofrecer «Guardar en Google Wallet»; si es `null`, completar el alta
-  sin más.»
-- **Versión del contrato:** `1.1` → **`1.2`**.
+- **§5.4 · Movimiento:** ejemplo `201` con `"googleWallet": "sincronizado"` y
+  la tabla de valores con la sugerencia de interfaz.
+- **§12 · Checklist:** añadir → «El movimiento devuelve `googleWallet`:
+  `sincronizado`/`sin_objeto` no requieren nada; `error` avisa sin reintentar
+  el movimiento; `null` = sin enlace, no mostrar nada.»
+- **Versión del contrato:** `1.2` → **`1.3`**.
 
 ---
 
-## 4. Notas de integración
+## 3. Notas de integración
 
 1. **No hay endpoint nuevo**: sigue habiendo 19 endpoints; sólo cambia una
    respuesta que ya existía.
-2. El QR que escanea el camarero (`barcode` del objeto) es
-   `<FRONT_URL>/comercio/captura/<idTarjeta>` — generado por el servidor, el
-   front no lo calcula ni lo envía.
-3. Puntos y premios del objeto se crean en `0` (como la tarjeta en nuestra BD);
-   la sincronización de saldos con Google Wallet es una **fase futura** (PATCH).
-4. Si el alta se hace desde un comercio **sin clase**, el mismo formulario de
-   registro sirve: `googleWalletUrl` será `null` y nada más cambia.
+2. Tampoco cambia la petición: los clientes actuales **no se rompen** (sólo
+   ignoran un campo que antes no venían).
+3. Sólo cambia `POST .../movimiento`. **No** cambian el registro, el perfil,
+   los listados de tarjetas, los endpoints de admin ni el alta de clase.
+4. El QR que escanea el camarero (`barcode` del objeto) sigue siendo
+   `<FRONT_URL>/comercio/captura/<idTarjeta>` y los saldos del objeto en
+   Google se actualizan con cada movimiento (era la «fase futura» del
+   v1.2, ya implementada).
+5. Google **no permite borrar** clases ni objetos desde su API: no existirá
+   endpoint de borrado (si una tarjeta se diera de baja, su objeto quedaría
+   inerte con `state: expired` — de momento no hay baja de tarjetas).
