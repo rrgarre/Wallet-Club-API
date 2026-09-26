@@ -1,6 +1,6 @@
 # Wallet Club API — Contrato de API
 
-> **Versión 1.3 · documento de interfaz.** Fuente de verdad para cualquier cliente
+> **Versión 1.4 · documento de interfaz.** Fuente de verdad para cualquier cliente
 > (web, móvil, panel, script). Todo lo que no esté documentado aquí **no existe**
 > y no debe asumirse. Los ejemplos de este documento son respuestas **reales**
 > capturadas del servidor en ejecución.
@@ -10,6 +10,9 @@
 > Google Wallet») y los objetos tarjeta incluyen `googleWalletObjetoId`.*
 > *v1.3: el movimiento de puntos/premios devuelve `googleWallet`, resultado de
 > la sincronización de los saldos con Google Wallet (§5.4).*
+> *v1.4: el registro de tarjeta se puede **reanudar** con la misma contraseña
+> (201 con el enlace de Google Wallet en lugar de `EMAIL_DUPLICADO`) y el
+> login de tarjeta devuelve `googleWalletUrl` (§3.4, §3.5).*
 
 ---
 
@@ -192,10 +195,21 @@ Toda respuesta es JSON con una de estas dos formas:
   "role": "tarjeta",
   "usuario": {
     "id": 2, "nombre": "Luis Captura", "email": "luis.cap@ejemplo.com",
-    "comercioId": 2, "puntos": 5, "premios": 2
-  }
+    "comercioId": 2, "puntos": 5, "premios": 2,
+    "googleWalletObjetoId": "3388000000023208299.USER_2_COMERCIO_5949..."
+  },
+  "googleWalletUrl": "https://pay.google.com/gp/v/save/eyJhbGciOiJSUzI1NiIs..."
 }
 ```
+- **`googleWalletUrl`** (v1.4): enlace «Añadir a Google Wallet» **regenerado**
+  en cada login (misma regla que en el alta: `string` con clase aprobada,
+  `null` si no hay clase / `DRAFT` / error de configuración). Sirve al
+  usuario para (re)guardar la tarjeta en su Wallet en cualquier momento:
+  es el camino de recuperación si perdió el enlace del alta. ⚠ Al ser una
+  URL «quien la abre se la guarda en su Google Wallet», devuélvela sólo a
+  ese cliente autenticado.
+- `usuario.googleWalletObjetoId` (v1.4): id del objeto en Google Wallet
+  (`null` si nunca se generó).
 - `401 BAD_CREDENTIALS`.
 - `403 TARJETA_INACTIVA`.
 - `409 EMAIL_AMBIGUO` → el email existe en varios comercios: repetir la
@@ -240,15 +254,33 @@ comercio pertenece la tarjeta.
 - ⚠ **La URL no está vinculada a ninguna cuenta**: quien la abra se la guarda
   en **su** Google Wallet. Devuélvela **sólo** al cliente del alta: no la
   expongas en listados ni la registres en analíticas.
-- **No existe** endpoint para recuperarla después (no está en el perfil).
+- **Recuperación (v1.4)**: si el usuario pierde el enlace (no lo ejecutó),
+  **no hace falta re-registrarse**: el login de tarjeta (§3.4) devuelve
+  `googleWalletUrl` regenerado en cada llamada. El enlace es local (JWT
+  firmada por el servidor), no caduca y reemitirlo nunca crea una segunda
+  tarjeta en Google (mismo `objectId`: si ya estaba guardada, Google la
+  actualiza).
 - `usuario.googleWalletObjetoId` es el id del objeto en Google Wallet (`null`
   si no se generó enlace).
+
+**Reanudación del alta (v1.4).** Si el email **ya existe en ese comercio**:
+
+| Situación | Respuesta |
+|---|---|
+| La **contraseña coincide** con la registrada | **`201` con la misma forma que un alta nueva**: `token`, `usuario` (la MISMA fila: id, nombre y saldos originales, sin duplicar) y `googleWalletUrl` regenerado. Caso típico: el usuario vuelve a rellenar el formulario porque no ejecutó el enlace de Google Wallet la primera vez |
+| La contraseña **no** coincide | `400 EMAIL_DUPLICADO` (conflicto real: otra cuenta o contraseña olvidada) |
+| La contraseña coincide pero la tarjeta está **desactivada** | `403 TARJETA_INACTIVA` |
+
+En la reanudación **no se crea fila**, **no se tocan puntos/premios** y los
+campos del formulario del reintento (p. ej. `nombre`) **se ignoran**: manda lo
+que ya había en BD.
 
 | Error | Código | HTTP |
 |---|---|---|
 | Comercio inexistente en la URL | `COMERCIO_NOT_FOUND` | 400 |
 | Comercio desactivado | `COMERCIO_INACTIVO` | 403 |
-| Email ya registrado en ese comercio | `EMAIL_DUPLICADO` | 400 |
+| Email ya registrado en ese comercio **con otra contraseña** | `EMAIL_DUPLICADO` | 400 |
+| Reanudación de tarjeta desactivada | `TARJETA_INACTIVA` | 403 |
 | Faltan campos / email inválido / password < 6 | `VALIDATION` | 400 |
 
 > Un `idRandomLargo` desconocido devuelve `400` (no `404`).
@@ -654,7 +686,7 @@ El id queda guardado en el comercio: se puede leer después con
 | `COMERCIO_DUPLICADO` | 400 | Nombre de comercio ya usado |
 | `COMERCIO_REQUERIDO` | 400 | Admin sin `comercioId` |
 | `TARJETA_REQUERIDA` | 400 | Admin sin `tarjetaId` |
-| `EMAIL_DUPLICADO` | 400 | Registro repetido en ese comercio |
+| `EMAIL_DUPLICADO` | 400 | Registro repetido en ese comercio **con otra contraseña** (misma contraseña ⇒ reanudación `201`, ver §3.5) |
 | `UNAUTHORIZED` | 401 | Falta token → login |
 | `INVALID_TOKEN` | 401 | Token caducado/inválido → login |
 | `BAD_CREDENTIALS` | 401 | Usuario o contraseña incorrectos |
@@ -793,4 +825,11 @@ curl -s -X POST $BASE/api/admin/comercios/$ID_RANDOM/google-wallet/clase \
 - [ ] El movimiento devuelve `googleWallet`: `sincronizado`/`sin_objeto` no
       requieren nada; `error` avisa sin reintentar el movimiento (la BD ya está
       bien); `null` = la tarjeta no tiene enlace (no mostrar nada).
+- [ ] Reenviar el formulario de alta con **el mismo email y la misma
+      contraseña** devuelve `201` (reanudación) y NO el error «email ya
+      registrado»: tratarlo como alta exitosa. `EMAIL_DUPLICADO` ahora sólo
+      aparece con contraseña distinta (ajustar el texto del mensaje).
+- [ ] El login de tarjeta incluye `googleWalletUrl`: si es `string`, se puede
+      ofrecer «Guardar en Google Wallet» también desde ahí; si es `null`, no
+      mostrar nada.
 - [ ] `error.message` se puede pintar directamente en la interfaz.

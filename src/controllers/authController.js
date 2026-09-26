@@ -68,6 +68,47 @@ async function loginComercio(req, res, next) {
 }
 
 /**
+ * Enlace «Añadir a Google Wallet» REGENERADO para una tarjeta existente.
+ *
+ * - Se firma localmente (JWT RS256): NO llama a Google y se puede emitir
+ *   infinitas veces. El id del objeto es determinista, así que reemitir
+ *   nunca crea una segunda tarjeta en Google (si ya está guardada, Google
+ *   la actualiza con la misma).
+ * - Devuelve `null` si el comercio no tiene clase creada o está en DRAFT
+ *   (misma regla que el alta) o si falla la firma: NUNCA rompe login ni
+ *   registro.
+ * - Si la tarjeta no tenía `googleWalletObjetoId` persistido, lo repara.
+ *
+ * @param {object} tarjeta fila de la tarjeta (id, puntos, premios...)
+ * @param {object} comercio fila del comercio
+ * @returns {Promise<string|null>} URL de Google o null
+ */
+async function enlaceGoogleWallet(tarjeta, comercio) {
+  try {
+    if (
+      !comercio?.googleWalletClaseId ||
+      !googleWallet.claseAdmiteTarjetas(comercio.googleWalletClaseEstado)
+    ) {
+      return null;
+    }
+    const enlace = googleWallet.generarEnlaceTarjeta({
+      claseId: comercio.googleWalletClaseId,
+      tarjeta,
+      comercio,
+    });
+    if (tarjeta.googleWalletObjetoId !== enlace.objectId) {
+      await dbTarjetas.guardarObjetoGoogleWallet(tarjeta.id, enlace.objectId);
+      tarjeta.googleWalletObjetoId = enlace.objectId;
+    }
+    return enlace.url;
+  } catch (err) {
+    // Nunca bloqueamos login/registro por un problema de Google Wallet.
+    console.error('[google-wallet] no se pudo generar el enlace:', err.message);
+    return null;
+  }
+}
+
+/**
  * POST /api/auth/tarjeta/login  { email, password, comercioId? }
  * comercioId (id del comercio o su idRandomLargo) sólo hace falta si el
  * email está repetido en varios comercios.
@@ -92,6 +133,12 @@ async function loginTarjeta(req, res, next) {
       throw forbidden('La tarjeta está inactiva', 'TARJETA_INACTIVA');
     }
 
+    // Google Wallet: enlace REGENERADO (misma lógica que en el alta) para
+    // que el usuario pueda (re)guardar su tarjeta desde el login. Añadido
+    // es a la respuesta: si el comercio no tiene clase aprobada => null.
+    const comercio = await dbComercios.findById(tarjeta.comercioId);
+    const googleWalletUrl = await enlaceGoogleWallet(tarjeta, comercio);
+
     const token = firmarToken({ sub: tarjeta.id, role: 'tarjeta', nombre: tarjeta.nombre });
     res.json({
       ok: true,
@@ -104,7 +151,9 @@ async function loginTarjeta(req, res, next) {
         comercioId: tarjeta.comercioId,
         puntos: tarjeta.puntos,
         premios: tarjeta.premios,
+        googleWalletObjetoId: tarjeta.googleWalletObjetoId ?? null,
       },
+      googleWalletUrl,
     });
   } catch (err) {
     next(err);
@@ -136,10 +185,41 @@ async function registroTarjeta(req, res, next) {
     const vEmailInput = vEmail(req.body.email);
     const pass = vPassword(req.body.password, 'password', env.minPasswordCliente);
 
-    // 3) Email ya registrado en este comercio
+    // 3) Email ya registrado en este comercio => ¿REANUDAR EL ALTA?
+    //    Si la contraseña coincide es el MISMO usuario que reintenta (caso
+    //    típico: no llegó a ejecutar el enlace de Google Wallet la primera
+    //    vez). NO se crea fila nueva ni se tocan saldos: se reemite el
+    //    enlace sobre la tarjeta existente y se devuelve la MISMA respuesta
+    //    que un alta nueva (201 + token).
+    //    Si la contraseña NO coincide => conflicto real (como hasta ahora).
     const existente = await dbTarjetas.findByEmail(vEmailInput, comercio.id);
     if (existente) {
-      throw badRequest('Ya existe una tarjeta con ese email en este comercio', 'EMAIL_DUPLICADO');
+      if (!(await verifyPassword(pass, existente.passwordHash))) {
+        throw badRequest('Ya existe una tarjeta con ese email en este comercio', 'EMAIL_DUPLICADO');
+      }
+      if (Number(existente.activo) !== 1) {
+        throw forbidden('La tarjeta está inactiva', 'TARJETA_INACTIVA');
+      }
+      // Ojo: se conservan el NOMBRE y los saldos originales de la fila;
+      // los datos del formulario de este reintento se ignoran.
+      const token = firmarToken({ sub: existente.id, role: 'tarjeta', nombre: existente.nombre });
+      const googleWalletUrl = await enlaceGoogleWallet(existente, comercio);
+      return res.status(201).json({
+        ok: true,
+        token,
+        role: 'tarjeta',
+        usuario: {
+          id: existente.id,
+          nombre: existente.nombre,
+          email: existente.email,
+          comercioId: existente.comercioId,
+          puntos: existente.puntos,
+          premios: existente.premios,
+          googleWalletObjetoId: existente.googleWalletObjetoId ?? null,
+        },
+        comercio: { id: comercio.id, nombre: comercio.nombre },
+        googleWalletUrl,
+      });
     }
 
     // 4) Alta: la comercioId DEDUCIDA por el controller
@@ -156,31 +236,10 @@ async function registroTarjeta(req, res, next) {
 
     const token = firmarToken({ sub: tarjeta.id, role: 'tarjeta', nombre: tarjeta.nombre });
 
-    // ------------------------------------------------------------------
     // Google Wallet: si el comercio YA tiene clase creada (y no está en
-    // DRAFT), generamos el enlace "Añadir a Google Wallet" de ESTA
-    // tarjeta. Si no la tiene: alta igual y googleWalletUrl = null.
-    // La creación del enlace es local (firma un JWT): no llama a Google.
-    // ------------------------------------------------------------------
-    let googleWalletUrl = null;
-    if (
-      comercio.googleWalletClaseId &&
-      googleWallet.claseAdmiteTarjetas(comercio.googleWalletClaseEstado)
-    ) {
-      try {
-        const enlace = googleWallet.generarEnlaceTarjeta({
-          claseId: comercio.googleWalletClaseId, // id de la clase en Google
-          tarjeta,                                // {id, nombre, puntos, premios...}
-          comercio,                               // {idRandomLargo, nombre...}
-        });
-        googleWalletUrl = enlace.url;
-        await dbTarjetas.guardarObjetoGoogleWallet(tarjeta.id, enlace.objectId);
-        tarjeta.googleWalletObjetoId = enlace.objectId;
-      } catch (err) {
-        // Nunca hacemos fallar el alta por un problema de Google Wallet.
-        console.error('[google-wallet] no se pudo generar el enlace:', err.message);
-      }
-    }
+    // DRAFT), generamos el enlace "Añadir a Google Wallet" de ESTA tarjeta;
+    // si no: alta igual y googleWalletUrl = null. (Ver helper de arriba.)
+    const googleWalletUrl = await enlaceGoogleWallet(tarjeta, comercio);
 
     res.status(201).json({
       ok: true,

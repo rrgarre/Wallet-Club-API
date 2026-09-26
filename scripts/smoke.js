@@ -418,7 +418,11 @@ async function main() {
   const tComercioInactivo = firmarToken({ sub: 2, role: 'comercio', nombre: 'Bar Cerrado' });
 
   r = await req('POST', '/api/auth/tarjeta/login', { body: { email: 'luis@x.com', password: 'Tarjeta123' } });
-  check('login tarjeta ok', r.status === 200 && r.json.token, `(${r.status})`);
+  check(
+    'login tarjeta ok (con googleWalletUrl null: aún sin clase)',
+    r.status === 200 && r.json.token && r.json.googleWalletUrl === null && r.json.usuario.googleWalletObjetoId === null,
+    `(${r.status}, gw=${r.json?.googleWalletUrl})`
+  );
   const tTarjeta = r.json.token;
 
   // Registro con idRandomLargo en la URL (la comercioId la deduce el controller)
@@ -441,11 +445,35 @@ async function main() {
     `(${r.status}, comercioId=${r.json?.usuario?.comercioId})`
   );
   const tNuevo = r.json.token;
+  const idNuevo = r.json.usuario.id;
 
+  // Mismo email pero OTRA contraseña => conflicto real (como siempre)
   r = await req('POST', '/api/registro/tarjeta/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6', {
-    body: { nombre: 'Nuevo', email: 'nuevo@x.com', password: 'secreto1' },
+    body: { nombre: 'Nuevo', email: 'nuevo@x.com', password: 'claveDistinta1' },
   });
-  check('registro email duplicado -> 400', r.status === 400, `(${r.status})`);
+  check('registro email duplicado con contraseña distinta -> 400', r.status === 400, `(${r.status})`);
+
+  // REANUDACIÓN: mismo email + MISMA contraseña => 201 con la MISMA tarjeta
+  const filasAntes = store.tarjetas.filter((t) => t.comercioId === 1).length;
+  r = await req('POST', '/api/registro/tarjeta/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6', {
+    body: { nombre: 'Nombre Ignorado', email: 'nuevo@x.com', password: 'secreto1' },
+  });
+  const filasDespues = store.tarjetas.filter((t) => t.comercioId === 1).length;
+  check(
+    'reanudación con misma contraseña -> 201 y MISMA tarjeta',
+    r.status === 201 && r.json.usuario.id === idNuevo && r.json.token,
+    `(${r.status}, id=${r.json?.usuario?.id} esperado ${idNuevo})`
+  );
+  check(
+    'reanudación NO crea filas nuevas',
+    filasAntes === filasDespues,
+    `(${filasAntes} -> ${filasDespues})`
+  );
+  check(
+    'reanudación conserva nombre y saldos originales',
+    r.json.usuario.nombre === 'Nuevo' && r.json.usuario.puntos === 0 && r.json.usuario.premios === 0,
+    `(nombre=${r.json?.usuario?.nombre}, p=${r.json?.usuario?.puntos})`
+  );
 
   r = await req('POST', '/api/auth/tarjeta/login', {
     body: { email: 'nuevo@x.com', password: 'secreto1', comercioId: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6' },
@@ -765,6 +793,37 @@ async function main() {
   check(
     'la fila en BD tiene googleWalletObjetoId',
     !!store.tarjetas.find((t) => t.id === nuevaWallet.usuario.id)?.googleWalletObjetoId
+  );
+
+  // ---- REANUDACIÓN + LOGIN con clase aprobada (reemisión del enlace) ----
+  r = await req('POST', '/api/auth/tarjeta/login', {
+    body: { email: 'wallet@x.com', password: 'secreto1' },
+  });
+  check(
+    'login tarjeta con clase aprobada -> googleWalletUrl string',
+    r.status === 200 &&
+      /^https:\/\/pay\.google\.com\/gp\/v\/save\//.test(r.json.googleWalletUrl) &&
+      r.json.usuario.googleWalletObjetoId === nuevaWallet.usuario.googleWalletObjetoId,
+    `(${r.status}, gw=${String(r.json?.googleWalletUrl).slice(0, 50)}...)`
+  );
+
+  // El "callejón sin salida": repetir el alta tras no haber guardado la tarjeta
+  const filasWalletAntes = store.tarjetas.filter((t) => t.comercioId === 1).length;
+  r = await req('POST', '/api/registro/tarjeta/' + CLASE_IDR, {
+    body: { nombre: 'Otra Vez', email: 'wallet@x.com', password: 'secreto1' },
+  });
+  const filasWalletDespues = store.tarjetas.filter((t) => t.comercioId === 1).length;
+  check(
+    'reanudación del alta con clase aprobada -> 201 con enlace nuevo',
+    r.status === 201 &&
+      r.json.usuario.id === nuevaWallet.usuario.id &&
+      /^https:\/\/pay\.google\.com\/gp\/v\/save\//.test(r.json.googleWalletUrl),
+    `(${r.status}, id=${r.json?.usuario?.id}, gw=${String(r.json?.googleWalletUrl).slice(0, 40)}...)`
+  );
+  check(
+    'la reanudación del alta no duplica la fila',
+    filasWalletAntes === filasWalletDespues,
+    `(${filasWalletAntes} -> ${filasWalletDespues})`
   );
 
   // El enlace firmado con el builder REAL debe llevar el objeto correcto
