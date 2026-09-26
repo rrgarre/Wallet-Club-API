@@ -42,6 +42,7 @@ async function sincronizarGoogleWallet(tarjeta) {
       objectId,
       puntos: tarjeta.puntos,
       premios: tarjeta.premios,
+      tarjetaId: tarjeta.id, // el PATCH renueva también el QR (sólo el id)
     });
   } catch (err) {
     // El movimiento ya está aplicado: no se propaga el error, sólo se informa.

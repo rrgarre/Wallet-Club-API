@@ -50,7 +50,7 @@ async function main() {
     const ok =
       obj.classId === claseEsperada &&
       obj.id === filas[0].googleWalletObjetoId &&
-      obj.barcode.value === `${process.env.FRONT_URL}/comercio/captura/${id}` &&
+      obj.barcode.value === String(id) &&
       obj.loyaltyPoints.balance.int === 0 &&
       obj.secondaryLoyaltyPoints.balance.int === 0 &&
       obj.accountName === 'Prueba Wallet';

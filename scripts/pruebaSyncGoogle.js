@@ -36,7 +36,7 @@ async function main() {
     state: 'ACTIVE',
     accountId: '999',
     accountName: 'Prueba Sync',
-    barcode: { type: 'QR_CODE', value: 'http://localhost:5174/comercio/captura/999' },
+    barcode: { type: 'QR_CODE', value: '999' },
     loyaltyPoints: { label: 'Puntos', balance: { int: 0 } },
     secondaryLoyaltyPoints: { label: 'Premios', balance: { int: 0 } },
   });
@@ -45,7 +45,7 @@ async function main() {
 
   {
     // 2) PATCH con nuestra función --------------------------------------
-    const estado = await gw.actualizarSaldos({ objectId: OBJETO, puntos: 7, premios: 2 });
+    const estado = await gw.actualizarSaldos({ objectId: OBJETO, puntos: 7, premios: 2, tarjetaId: 999 });
     console.log('actualizarSaldos(7 puntos, 2 premios) ->', estado);
     if (estado !== 'sincronizado') throw new Error(`Esperaba 'sincronizado' y llegó '${estado}'`);
 
@@ -66,7 +66,7 @@ async function main() {
       num(o.secondaryLoyaltyPoints?.balance) === 2 &&
       o.classId === CLASE &&
       String(o.state).toLowerCase() === 'active' &&
-      o.barcode?.value === 'http://localhost:5174/comercio/captura/999' &&
+      o.barcode?.value === '999' &&
       o.accountId === '999';
     console.log('\nVERIFICACIÓN:', ok ? 'TODO CORRECTO' : 'HAY ALGO QUE NO CUADRA');
     if (!ok) process.exitCode = 1;

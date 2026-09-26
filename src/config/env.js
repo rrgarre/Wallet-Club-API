@@ -36,8 +36,8 @@ const env = {
     credenciales: process.env.GOOGLE_WALLET_CREDENTIALS || '',
   },
 
-  // URL base del front: de aquí sale el QR de cada tarjeta
-  //   FRONT_URL + '/comercio/captura/' + idTarjeta
+  // URL base del front. El QR de la tarjeta ya NO la incluye (el QR sólo
+  // lleva el id de la tarjeta; el front arma la URL en su lector de QR).
   frontUrl: (process.env.FRONT_URL || '').replace(/\/+$/, ''),
 };
 

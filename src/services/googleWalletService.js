@@ -345,12 +345,16 @@ function objectIdDe(tarjetaId, idRandomLargo) {
   return `${issuerId}.USER_${tarjetaId}_COMERCIO_${idRandomLargo}`;
 }
 
-/** QR que escaneará el camarero: FRONT_URL + /comercio/captura/ + idTarjeta. */
+/**
+ * Contenido del QR (barcode) de cada tarjeta: SÓLO el identificador
+ * numérico de la tarjeta (p. ej. "7").
+ *
+ * Motivo de seguridad: el QR NO expone la URL de captura de los
+ * comercios; es el front quien, en su página exclusiva con lector de QR,
+ * construye la URL real añadiendo la base + este identificador.
+ */
 function qrDeTarjeta(tarjetaId) {
-  if (!env.frontUrl) {
-    throw new AppError(503, 'Falta FRONT_URL en el fichero .env', 'GOOGLE_WALLET_SIN_CONFIG');
-  }
-  return `${env.frontUrl}/comercio/captura/${tarjetaId}`;
+  return String(tarjetaId);
 }
 
 /**
@@ -362,13 +366,13 @@ function qrDeTarjeta(tarjetaId) {
  * @param {string} p.claseId  id de la CLASE del comercio (comercios.googleWalletClaseId)
  * @param {object} p.tarjeta  fila de la tarjeta (id, nombre, puntos, premios...)
  * @param {object} p.comercio fila del comercio (idRandomLargo, nombre...)
- * @returns {{url:string, objectId:string, qrUrl:string}}
+ * @returns {{url:string, objectId:string, qr:string}}
  */
 function generarEnlaceTarjeta({ claseId, tarjeta, comercio }) {
   const { credenciales } = configuracion();
   const classId = resolverClassId(claseId);
   const objectId = objectIdDe(tarjeta.id, comercio.idRandomLargo);
-  const qrUrl = qrDeTarjeta(tarjeta.id);
+  const qr = qrDeTarjeta(tarjeta.id); // QR = sólo el id de la tarjeta
 
   const objeto = {
     // ---- Imprescindibles ----
@@ -380,8 +384,8 @@ function generarEnlaceTarjeta({ claseId, tarjeta, comercio }) {
     accountId: String(tarjeta.id), // id interno (máx. 20 caracteres; Google no lo verifica)
     accountName: tarjeta.nombre,   // nombre visible en la tarjeta
 
-    // ---- Código de canje: la URL de captura del camarero ----
-    barcode: { type: 'QR_CODE', value: qrUrl },
+    // ---- Código de canje: QR con SÓLO el id (la URL la arma el front) ----
+    barcode: { type: 'QR_CODE', value: qr },
 
     // ---- Contadores (lo que Google renderiza siempre) ----
     loyaltyPoints: { label: 'Puntos', balance: { int: tarjeta.puntos ?? 0 } },
@@ -404,7 +408,7 @@ function generarEnlaceTarjeta({ claseId, tarjeta, comercio }) {
   };
 
   const token = jwt.sign(claims, credenciales.private_key, { algorithm: 'RS256' });
-  return { url: `https://pay.google.com/gp/v/save/${token}`, objectId, qrUrl };
+  return { url: `https://pay.google.com/gp/v/save/${token}`, objectId, qr };
 }
 
 /** ¿El estado guardado de la clase admite crear tarjetas? (DRAFT, no) */
@@ -420,29 +424,38 @@ function claseAdmiteTarjetas(estado) {
 //  enlace y la ha guardado. A partir de ahí, cada cambio de puntos o
 //  premios en nuestra BD se refleja con un PATCH de los dos contadores.
 //
-//  updateMask: sólo se tocan esos dos campos; el resto de la tarjeta
-//  (classId, barcode, state...) queda intacto.
+//  updateMask: sólo se tocan los contadores y el barcode. El barcode se
+//  incluye para que las tarjetas YA guardadas en el Wallet converjan al
+//  formato nuevo del QR (sólo el id de la tarjeta) en su próximo
+//  movimiento; el resto de la tarjeta (classId, state...) queda intacto.
 // =====================================================================
 
 /**
- * PATCH loyaltyObject/{id} — sincroniza puntos y premios con Google Wallet.
+ * PATCH loyaltyObject/{id} — sincroniza puntos, premios y QR con Google Wallet.
  *
  * @param {object} p
- * @param {string} p.objectId tarjetas.googleWalletObjetoId
- * @param {number} p.puntos   saldo nuevo de puntos
- * @param {number} p.premios  saldo nuevo de premios
+ * @param {string} p.objectId  tarjetas.googleWalletObjetoId
+ * @param {number} p.puntos    saldo nuevo de puntos
+ * @param {number} p.premios   saldo nuevo de premios
+ * @param {number} [p.tarjetaId] si se pasa, también se actualiza el barcode
+ *   al QR nuevo (sólo el id); útil para migrar tarjetas ya guardadas
  * @returns {Promise<'sincronizado'|'sin_objeto'>}
  *   - 'sincronizado' → Google confirmó (200)
  *   - 'sin_objeto'   → 404: el usuario todavía no ha guardado la tarjeta
  * Lanza AppError(502) para el resto (el llamante decide qué hacer).
  */
-async function actualizarSaldos({ objectId, puntos, premios }) {
+async function actualizarSaldos({ objectId, puntos, premios, tarjetaId }) {
   const token = await obtenerToken();
 
   const cuerpo = {
     loyaltyPoints: { label: 'Puntos', balance: { int: Number(puntos) || 0 } },
     secondaryLoyaltyPoints: { label: 'Premios', balance: { int: Number(premios) || 0 } },
   };
+  const mascara = ['loyaltyPoints', 'secondaryLoyaltyPoints'];
+  if (tarjetaId !== undefined && tarjetaId !== null) {
+    cuerpo.barcode = { type: 'QR_CODE', value: qrDeTarjeta(tarjetaId) };
+    mascara.push('barcode');
+  }
 
   const control = new AbortController();
   const reloj = setTimeout(() => control.abort(), TIMEOUT_GOOGLE_MS);
@@ -450,7 +463,7 @@ async function actualizarSaldos({ objectId, puntos, premios }) {
   let respuesta;
   try {
     respuesta = await fetch(
-      `${URL_OBJETO}/${encodeURIComponent(objectId)}?updateMask=loyaltyPoints,secondaryLoyaltyPoints`,
+      `${URL_OBJETO}/${encodeURIComponent(objectId)}?updateMask=${mascara.join(',')}`,
       {
         method: 'PATCH',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },

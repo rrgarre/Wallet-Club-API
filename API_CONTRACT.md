@@ -1,6 +1,6 @@
 # Wallet Club API — Contrato de API
 
-> **Versión 1.4 · documento de interfaz.** Fuente de verdad para cualquier cliente
+> **Versión 1.5 · documento de interfaz.** Fuente de verdad para cualquier cliente
 > (web, móvil, panel, script). Todo lo que no esté documentado aquí **no existe**
 > y no debe asumirse. Los ejemplos de este documento son respuestas **reales**
 > capturadas del servidor en ejecución.
@@ -13,6 +13,8 @@
 > *v1.4: el registro de tarjeta se puede **reanudar** con la misma contraseña
 > (201 con el enlace de Google Wallet en lugar de `EMAIL_DUPLICADO`) y el
 > login de tarjeta devuelve `googleWalletUrl` (§3.4, §3.5).*
+> *v1.5: el QR (`barcode`) de la tarjeta en Google Wallet contiene **sólo el
+> identificador** de la tarjeta, nunca la URL de captura (§3.5).*
 
 ---
 
@@ -260,6 +262,14 @@ comercio pertenece la tarjeta.
   firmada por el servidor), no caduca y reemitirlo nunca crea una segunda
   tarjeta en Google (mismo `objectId`: si ya estaba guardada, Google la
   actualiza).
+- **QR de la tarjeta (v1.5)**: el `barcode` QR que la tarjeta lleva en Google
+  Wallet contiene **sólo el identificador numérico** de la tarjeta (p. ej.
+  `7`), **nunca** la URL de captura: quien lo escanee no ve la ruta del front
+  (protección de esa URL). Quien necesite la captura (el front, con su
+  página exclusiva con lector de QR) construye la URL real con la base +
+  ese identificador. Las tarjetas ya guardadas en el Wallet migran al
+  nuevo formato solas con su **siguiente movimiento** (el `PATCH` de
+  `googleWallet` de §5.4 renueva también el `barcode`).
 - `usuario.googleWalletObjetoId` es el id del objeto en Google Wallet (`null`
   si no se generó enlace).
 
@@ -832,4 +842,7 @@ curl -s -X POST $BASE/api/admin/comercios/$ID_RANDOM/google-wallet/clase \
 - [ ] El login de tarjeta incluye `googleWalletUrl`: si es `string`, se puede
       ofrecer «Guardar en Google Wallet» también desde ahí; si es `null`, no
       mostrar nada.
+- [ ] El QR escaneado de una tarjeta contiene **sólo su identificador**
+      (`7`, no una URL): la URL de captura se arma en el lector del front
+      (base + identificador).
 - [ ] `error.message` se puede pintar directamente en la interfaz.

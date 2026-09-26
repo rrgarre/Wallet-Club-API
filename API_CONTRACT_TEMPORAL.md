@@ -1,8 +1,9 @@
-# Wallet Club API — CONTRATO TEMPORAL v1.4 (solo cambios nuevos)
+# Wallet Club API — CONTRATO TEMPORAL v1.4 + v1.5 (solo cambios nuevos)
 
 > **Fichero desechable.** Contiene ÚNICAMENTE la información que hay que
-> integrar en `API_CONTRACT.md` (v1.3 → **v1.4**): la **reanudación del
-> registro de tarjeta** y el **`googleWalletUrl` en el login**. Ambos cambios
+> integrar en `API_CONTRACT.md` (v1.3 → **v1.4** → **v1.5**): la **reanudación del
+> registro de tarjeta** y el **`googleWalletUrl` en el login** (v1.4), y el
+> **cambio del contenido del QR** de la tarjeta (v1.5). Los dos primeros
 > resuelven el callejón sin salida de «me registré, no ejecuté el enlace de
 > Google Wallet y ahora me dice que el email ya está registrado».
 > El contrato definitivo ya la incluye; este fichero existe sólo para no
@@ -109,21 +110,47 @@ devuelve éxito**. Vuestro flujo normal de «alta correcta» ya lo trata bien
 
 ---
 
-## 3. Cambios en las secciones del contrato principal
+## 3. QR de la tarjeta: sólo el identificador (v1.5)
+
+**Cambio de contenido, no de endpoints.** El QR (`barcode`) que cada tarjeta
+lleva dentro de Google Wallet **ya no contiene la URL de captura**:
+
+| | Antes | Ahora |
+|---|---|---|
+| Contenido del QR | `<FRONT_URL>/comercio/captura/7` | `7` (sólo el identificador de la tarjeta) |
+
+**Por qué:** proteger la URL que usan los comercios — quien escanee el QR
+desde cualquier parte (capturas, fotos, otros apps) **no ve la ruta** del front.
+
+**Qué tiene que hacer el front:**
+
+- Su **página exclusiva con lector de QR** lee el contenido del QR (un número
+  o string) y **arma la URL real**: `<base>/<ruta>/<identificador-leído>`.
+  El identificador que llega es el que se añade al endpoint real.
+- Si ya tenían código que esperaba una URL completa dentro del QR, hay que
+  ajustarlo: ahora llega **sólo el id**.
+
+**Tarjetas ya guardadas en el Wallet** (si las hay): migran solas al nuevo
+formato con su **próximo movimiento** de puntos/premios (el `PATCH` de
+`googleWallet` de §5.4 renueva también el QR). No hace falta hacer nada.
+
+---
+
+## 4. Cambios en las secciones del contrato principal
 
 - **§3.4 · Login de tarjeta:** ejemplo con `googleWalletUrl` y
   `usuario.googleWalletObjetoId` + tabla de significado.
 - **§3.5 · Registro:** tabla de «reanudación» (201 / 400 / 403), nota de que
-  no duplica filas ni toca saldos, y la fila de error `EMAIL_DUPLICADO`
-  reescrita («con otra contraseña»).
+  no duplica filas ni toca saldos, la fila de error `EMAIL_DUPLICADO`
+  reescrita («con otra contraseña») y la nota del **QR con sólo el id**.
 - **§8 · Códigos de error:** `EMAIL_DUPLICADO` → «con otra contraseña
   (misma contraseña ⇒ reanudación `201`)».
-- **§12 · Checklist:** los dos puntos nuevos (reanudación y login).
-- **Versión del contrato:** `1.3` → **`1.4`**.
+- **§12 · Checklist:** los tres puntos nuevos (reanudación, login y QR).
+- **Versión del contrato:** `1.3` → **`1.5`**.
 
 ---
 
-## 4. Notas de integración
+## 5. Notas de integración
 
 1. **No hay endpoints nuevos**: siguen habiendo 19; sólo cambian dos
    respuestas que ya existían. Los clientes actuales **no se rompen**

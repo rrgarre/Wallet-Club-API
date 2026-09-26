@@ -170,7 +170,7 @@ Variables en `.env`:
 ```bash
 GOOGLE_WALLET_ISSUER_ID=...        # id de emisor: forma el CLASS_ID <issuerId>.<idRandomLargo>
 GOOGLE_WALLET_CREDENTIALS=...      # ruta al JSON de la service account (ignorado por git)
-FRONT_URL=...                      # URL base del front: QR = <FRONT_URL>/comercio/captura/<idTarjeta>
+FRONT_URL=...                      # URL base del front (el QR de la tarjeta sólo lleva el id)
 ```
 
 - La service account necesita el rol GCP **«Wallet Object Issuer»**.

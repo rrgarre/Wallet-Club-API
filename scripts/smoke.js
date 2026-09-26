@@ -374,12 +374,12 @@ async function main() {
   googleWalletStub.generarEnlaceTarjeta = ({ claseId, tarjeta, comercio }) => ({
     url: `https://pay.google.com/gp/v/save/FAKE_${tarjeta.id}`,
     objectId: `${env.googleWallet.issuerId}.USER_${tarjeta.id}_COMERCIO_${comercio.idRandomLargo}`,
-    qrUrl: env.frontUrl ? `${env.frontUrl}/comercio/captura/${tarjeta.id}` : '',
+    qr: String(tarjeta.id),
   });
   // PATCH de saldos: sin red; controlable con globals para los tests
   global.__ULTIMA_SYNC = null;
-  googleWalletStub.actualizarSaldos = async ({ objectId, puntos, premios }) => {
-    global.__ULTIMA_SYNC = { objectId, puntos, premios };
+  googleWalletStub.actualizarSaldos = async ({ objectId, puntos, premios, tarjetaId }) => {
+    global.__ULTIMA_SYNC = { objectId, puntos, premios, tarjetaId };
     if (global.__GW_SYNC_FALLO) throw new Error('falso: Google no responde');
     if (global.__GW_SYNC_SIN_OBJETO) return 'sin_objeto';
     return 'sincronizado';
@@ -827,7 +827,7 @@ async function main() {
   );
 
   // El enlace firmado con el builder REAL debe llevar el objeto correcto
-  if (env.googleWallet.issuerId && env.frontUrl) {
+  if (env.googleWallet.issuerId) {
     try {
       const enlaceReal = generarEnlaceReal({
         claseId: store.comercios[0].googleWalletClaseId,
@@ -851,7 +851,7 @@ async function main() {
           obj.state === 'ACTIVE' &&
           obj.accountId === '7' &&
           obj.accountName === 'Luis' &&
-          obj.barcode.value === `${env.frontUrl}/comercio/captura/7` &&
+          obj.barcode.value === '7' &&
           obj.loyaltyPoints.balance.int === 4 &&
           obj.secondaryLoyaltyPoints.balance.int === 1
       );
@@ -859,7 +859,7 @@ async function main() {
       check('builder real: JWT savetowallet con el objeto correcto', false, e.message);
     }
   } else {
-    check('builder real: (omitido, faltan GOOGLE_WALLET_ISSUER_ID / FRONT_URL en .env)', true);
+    check('builder real: (omitido, falta GOOGLE_WALLET_ISSUER_ID en .env)', true);
   }
 
   // ---------------- SINCRONIZACIÓN DE SALDOS (PATCH a Google) ----------------
@@ -889,6 +889,11 @@ async function main() {
       global.__ULTIMA_SYNC.puntos === 3 &&
       global.__ULTIMA_SYNC.premios === 0,
     JSON.stringify(global.__ULTIMA_SYNC)
+  );
+  check(
+    'el PATCH renueva también el QR (sólo el id de la tarjeta)',
+    global.__ULTIMA_SYNC && global.__ULTIMA_SYNC.tarjetaId === idWallet,
+    `tarjetaId=${global.__ULTIMA_SYNC?.tarjetaId} (esperado ${idWallet})`
   );
 
   // Google caído: el movimiento se aplica igual y se informa 'error'
