@@ -3,9 +3,12 @@
 //  Todas las rutas exigen comercio.activo = true (middleware).
 // =====================================================================
 const dbTarjetas = require('../db/tarjetas');
+const dbComercios = require('../db/comercios');
+const { hashPassword, verifyPassword } = require('../utils/hash');
 const { aplicarMovimiento } = require('../services/movimientoService');
-const { notFound, badRequest } = require('../utils/errors');
-const { entero, texto } = require('../utils/validate');
+const { notFound, badRequest, unauthorized } = require('../utils/errors');
+const { entero, texto, password: vPassword } = require('../utils/validate');
+const { env } = require('../config/env');
 
 /** GET /api/comercio/perfil */
 async function perfil(req, res, next) {
@@ -119,4 +122,32 @@ async function movimiento(req, res, next) {
   }
 }
 
-module.exports = { perfil, listarTarjetas, obtenerTarjeta, movimiento };
+/**
+ * PATCH /api/comercio/password   { passwordActual, passwordNueva }
+ *
+ * El comercio cambia SU propia contraseña (sólo token de rol 'comercio';
+ * el admin no puede usar esta ruta — para restablecer la contraseña de un
+ * comercio desde fuera, el admin usa PATCH /api/admin/comercios/:id).
+ *
+ * - `passwordActual` tiene que coincidir con la actual → si no, 401.
+ * - `passwordNueva` respeta MIN_PASSWORD_ADMIN (igual que al crear el
+ *   comercio). No hay límite de intentos más allá del token: sin token
+ *   válido no se llega aquí.
+ */
+async function cambiarPassword(req, res, next) {
+  try {
+    const actual = texto(req.body.passwordActual, 'passwordActual', { max: 200 });
+    const nueva = vPassword(req.body.passwordNueva, 'passwordNueva', env.minPasswordAdmin);
+
+    if (!(await verifyPassword(actual, req.comercio.passwordHash))) {
+      throw unauthorized('La contraseña actual no es correcta', 'PASSWORD_ACTUAL_INCORRECTA');
+    }
+
+    await dbComercios.update(req.comercio.id, { passwordHash: await hashPassword(nueva) });
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { perfil, listarTarjetas, obtenerTarjeta, movimiento, cambiarPassword };

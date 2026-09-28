@@ -19,6 +19,11 @@ const env = {
   // Contraseñas
   minPasswordAdmin: num(process.env.MIN_PASSWORD_ADMIN, 8),
   minPasswordCliente: num(process.env.MIN_PASSWORD_CLIENTE, 6),
+  // Contraseña FIJA de las altas de tarjeta/usuario. El front NO la envía
+  // en el registro: el servidor la usa siempre (el alta queda "oculta" y
+  // el usuario interactúa con sus puntos vía Google Wallet). El login de
+  // tarjeta (pantalla preparada) autentica con esta misma contraseña.
+  usuarioPassword: (process.env.USUARIO_PASSWORD || '').trim(),
 
   // Reglas de negocio
   camareroCodigos: (process.env.CAMARERO_CODIGOS || '')
@@ -47,6 +52,14 @@ function validarEnv() {
   }
   if (env.jwtSecret === 'cambia-este-secreto-por-uno-largo-y-aleatorio' && env.nodeEnv === 'production') {
     throw new Error('JWT_SECRET sigue siendo el valor por defecto: cámbialo en .env');
+  }
+  if (!env.usuarioPassword) {
+    throw new Error('Falta USUARIO_PASSWORD en el fichero .env (contraseña fija de las altas de tarjeta)');
+  }
+  if (env.usuarioPassword.length < env.minPasswordCliente) {
+    throw new Error(
+      `USUARIO_PASSWORD debe tener al menos ${env.minPasswordCliente} caracteres (MIN_PASSWORD_CLIENTE)`
+    );
   }
 }
 

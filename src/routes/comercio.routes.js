@@ -22,5 +22,8 @@ router.get('/comercio/perfil', ctrl.perfil);
 router.get('/comercio/tarjetas', ctrl.listarTarjetas);
 router.get('/comercio/tarjetas/:id', ctrl.obtenerTarjeta);
 router.post('/comercio/tarjetas/:id/movimiento', ctrl.movimiento);
+// Sólo el propio comercio: el admin restablece contraseñas con
+// PATCH /api/admin/comercios/:id (por eso se estrecha el rol aquí).
+router.patch('/comercio/password', requireRole('comercio'), ctrl.cambiarPassword);
 
 module.exports = router;

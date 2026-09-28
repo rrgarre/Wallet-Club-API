@@ -161,11 +161,17 @@ async function loginTarjeta(req, res, next) {
 }
 
 /**
- * POST /api/registro/tarjeta/:idRandomLargo   { nombre, email, password }
+ * POST /api/registro/tarjeta/:idRandomLargo   { nombre, email }
  *
  * El idRandomLargo sólo IDENTIFICA el comercio destino en esta ruta
  * pública: no da acceso a nada privado del comercio. La comercioId se
  * deduce aquí, en el controller.
+ *
+ * La password NO viene del front: el servidor usa SIEMPRE la constante
+ * del .env (`USUARIO_PASSWORD`). El alta de usuario queda "oculta": la
+ * pantalla de tarjeta queda preparada, pero el usuario interactúa con
+ * sus puntos a través de Google Wallet. Si el body trae `password`, se
+ * IGNORA.
  */
 async function registroTarjeta(req, res, next) {
   try {
@@ -183,15 +189,18 @@ async function registroTarjeta(req, res, next) {
     // 2) Datos del cliente
     const nombre = texto(req.body.nombre, 'nombre', { max: 150 });
     const vEmailInput = vEmail(req.body.email);
-    const pass = vPassword(req.body.password, 'password', env.minPasswordCliente);
+    // Contraseña FIJA del .env: NUNCA se toma la del front (si el body
+    // trae `password`, se ignora). Ver USUARIO_PASSWORD en env.js.
+    const pass = env.usuarioPassword;
 
     // 3) Email ya registrado en este comercio => ¿REANUDAR EL ALTA?
-    //    Si la contraseña coincide es el MISMO usuario que reintenta (caso
-    //    típico: no llegó a ejecutar el enlace de Google Wallet la primera
-    //    vez). NO se crea fila nueva ni se tocan saldos: se reemite el
-    //    enlace sobre la tarjeta existente y se devuelve la MISMA respuesta
-    //    que un alta nueva (201 + token).
-    //    Si la contraseña NO coincide => conflicto real (como hasta ahora).
+    //    Si la contraseña de la cuenta es la estándar (USUARIO_PASSWORD)
+    //    es el MISMO usuario que reintenta (caso típico: no llegó a
+    //    ejecutar el enlace de Google Wallet la primera vez). NO se crea
+    //    fila nueva ni se tocan saldos: se reemite el enlace sobre la
+    //    tarjeta existente y se devuelve la MISMA respuesta que un alta
+    //    nueva (201 + token).
+    //    Si la cuenta tiene OTRA contraseña (heredada) => conflicto real.
     const existente = await dbTarjetas.findByEmail(vEmailInput, comercio.id);
     if (existente) {
       if (!(await verifyPassword(pass, existente.passwordHash))) {

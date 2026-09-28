@@ -1,6 +1,6 @@
 # Wallet Club API — Contrato de API
 
-> **Versión 1.5 · documento de interfaz.** Fuente de verdad para cualquier cliente
+> **Versión 1.6 · documento de interfaz.** Fuente de verdad para cualquier cliente
 > (web, móvil, panel, script). Todo lo que no esté documentado aquí **no existe**
 > y no debe asumirse. Los ejemplos de este documento son respuestas **reales**
 > capturadas del servidor en ejecución.
@@ -15,6 +15,9 @@
 > login de tarjeta devuelve `googleWalletUrl` (§3.4, §3.5).*
 > *v1.5: el QR (`barcode`) de la tarjeta en Google Wallet contiene **sólo el
 > identificador** de la tarjeta, nunca la URL de captura (§3.5).*
+> *v1.6: el registro de tarjeta **no pide contraseña** (la pone el servidor:
+> `USUARIO_PASSWORD`) y hay endpoint nuevo para que el comercio cambie su
+> contraseña (§3.4, §3.5, §5.5). **20 endpoints**.*
 
 ---
 
@@ -203,6 +206,11 @@ Toda respuesta es JSON con una de estas dos formas:
   "googleWalletUrl": "https://pay.google.com/gp/v/save/eyJhbGciOiJSUzI1NiIs..."
 }
 ```
+- **Contraseña de los usuarios (v1.6)**: los usuarios nuevos usan la
+  **contraseña estándar del servidor** (`USUARIO_PASSWORD` en el `.env` del
+  servidor; valor actual `123123`). El formulario de login la envía tal cual
+  (el de alta **no** la pide: la pone el servidor). *Cualquier `password` que
+  el front mande en el registro se ignora.*
 - **`googleWalletUrl`** (v1.4): enlace «Añadir a Google Wallet» **regenerado**
   en cada login (misma regla que en el alta: `string` con clase aprobada,
   `null` si no hay clase / `DRAFT` / error de configuración). Sirve al
@@ -228,7 +236,13 @@ comercio pertenece la tarjeta.
 |---|---|---|
 | `nombre` | string (1–150) | ✅ |
 | `email` | string válido | ✅ |
-| `password` | string, **mínimo 6** | ✅ |
+| ~~`password`~~ | — | **no se envía (v1.6)**: la pone el servidor (`USUARIO_PASSWORD`). Si el body la trae, **se ignora** |
+
+> **Contraseña (v1.6).** El servidor guarda SIEMPRE la contraseña estándar
+> `USUARIO_PASSWORD` (`.env` del servidor; valor actual `123123`) y el login
+> de tarjeta (§3.4) autentica con ella. El alta de usuario queda «oculta»:
+> la pantalla de tarjeta se deja preparada, pero el usuario normal sólo
+> interactúa con sus puntos a través de Google Wallet.
 
 `201` — **devuelve token**: el cliente queda logueado sin llamar al login:
 ```json
@@ -273,13 +287,13 @@ comercio pertenece la tarjeta.
 - `usuario.googleWalletObjetoId` es el id del objeto en Google Wallet (`null`
   si no se generó enlace).
 
-**Reanudación del alta (v1.4).** Si el email **ya existe en ese comercio**:
+**Reanudación del alta (v1.4/v1.6).** Si el email **ya existe en ese comercio**:
 
 | Situación | Respuesta |
 |---|---|
-| La **contraseña coincide** con la registrada | **`201` con la misma forma que un alta nueva**: `token`, `usuario` (la MISMA fila: id, nombre y saldos originales, sin duplicar) y `googleWalletUrl` regenerado. Caso típico: el usuario vuelve a rellenar el formulario porque no ejecutó el enlace de Google Wallet la primera vez |
-| La contraseña **no** coincide | `400 EMAIL_DUPLICADO` (conflicto real: otra cuenta o contraseña olvidada) |
-| La contraseña coincide pero la tarjeta está **desactivada** | `403 TARJETA_INACTIVA` |
+| La cuenta usa la **contraseña estándar** (`USUARIO_PASSWORD`) — caso normal de todas las altas nuevas | **`201` con la misma forma que un alta nueva**: `token`, `usuario` (la MISMA fila: id, nombre y saldos originales, sin duplicar) y `googleWalletUrl` regenerado. Caso típico: el usuario vuelve a rellenar el formulario porque no ejecutó el enlace de Google Wallet la primera vez |
+| La cuenta tiene **otra contraseña** (heredada de antes del v1.6) | `400 EMAIL_DUPLICADO` (conflicto real: no se reanuda) |
+| Contraseña estándar pero la tarjeta está **desactivada** | `403 TARJETA_INACTIVA` |
 
 En la reanudación **no se crea fila**, **no se tocan puntos/premios** y los
 campos del formulario del reintento (p. ej. `nombre`) **se ignoran**: manda lo
@@ -289,7 +303,7 @@ que ya había en BD.
 |---|---|---|
 | Comercio inexistente en la URL | `COMERCIO_NOT_FOUND` | 400 |
 | Comercio desactivado | `COMERCIO_INACTIVO` | 403 |
-| Email ya registrado en ese comercio **con otra contraseña** | `EMAIL_DUPLICADO` | 400 |
+| Email ya registrado con contraseña distinta de la estándar (cuentas heredadas) | `EMAIL_DUPLICADO` | 400 |
 | Reanudación de tarjeta desactivada | `TARJETA_INACTIVA` | 403 |
 | Faltan campos / email inválido / password < 6 | `VALIDATION` | 400 |
 
@@ -470,6 +484,37 @@ original (no repetir la animación de «sumado otra vez»).
 | `COMERCIO_REQUERIDO` | 400 | admin sin `comercioId` |
 | `UNAUTHORIZED` / `INVALID_TOKEN` | 401 | sin token o caducado |
 | `FORBIDDEN_ROLE` | 403 | rol equivocado |
+
+---
+
+### 5.5 `PATCH /api/comercio/password`
+
+El comercio autenticado cambia **su propia** contraseña.
+
+**Body**
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `passwordActual` | string | ✅ | debe coincidir con la actual |
+| `passwordNueva` | string | ✅ | mínimo `MIN_PASSWORD_ADMIN` (8) |
+
+```json
+{ "passwordActual": "Comercio123", "passwordNueva": "NuevaClave123" }
+```
+
+**`200`**
+```json
+{ "ok": true }
+```
+
+- Sólo rol **`comercio`**: el `admin` recibe `403 FORBIDDEN_ROLE` (para
+  restablecer la contraseña de un comercio desde fuera, el admin usa
+  `PATCH /api/admin/comercios/:id` con `{ password }`).
+- **Errores**: `400 VALIDATION` (faltan campos o `passwordNueva` < 8),
+  `401 PASSWORD_ACTUAL_INCORRECTA`, `401` sin token,
+  `403 COMERCIO_INACTIVO`.
+- Al cambiarla deja de valer la anterior en todos los logins de ese
+  comercio (los tokens ya emitidos siguen siendo válidos hasta expirar).
 
 ---
 
@@ -700,6 +745,7 @@ El id queda guardado en el comercio: se puede leer después con
 | `UNAUTHORIZED` | 401 | Falta token → login |
 | `INVALID_TOKEN` | 401 | Token caducado/inválido → login |
 | `BAD_CREDENTIALS` | 401 | Usuario o contraseña incorrectos |
+| `PASSWORD_ACTUAL_INCORRECTA` | 401 | `PATCH /api/comercio/password`: la contraseña actual no coincide |
 | `FORBIDDEN_ROLE` | 403 | Rol equivocado para esa ruta |
 | `COMERCIO_INACTIVO` | 403 | Cuenta de comercio desactivada |
 | `TARJETA_INACTIVA` | 403 | Tarjeta desactivada |
@@ -734,14 +780,15 @@ El id queda guardado en el comercio: se puede leer después con
 | 9 | GET | `/api/comercio/tarjetas` | comercio / admin |
 | 10 | GET | `/api/comercio/tarjetas/:id` | comercio / admin |
 | 11 | POST | `/api/comercio/tarjetas/:id/movimiento` | comercio / admin |
-| 12 | GET | `/api/admin/comercios` | admin |
-| 13 | GET | `/api/admin/comercios/:id` | admin |
-| 14 | POST | `/api/admin/comercios` | admin |
-| 15 | PATCH | `/api/admin/comercios/:id` | admin |
-| 16 | GET | `/api/admin/tarjetas` | admin |
-| 17 | GET | `/api/admin/tarjetas/:id` | admin |
-| 18 | GET | `/api/admin/operaciones` | admin |
-| 19 | POST | `/api/admin/comercios/:idRandomLargo/google-wallet/clase` | admin |
+| 12 | PATCH | `/api/comercio/password` | comercio |
+| 13 | GET | `/api/admin/comercios` | admin |
+| 14 | GET | `/api/admin/comercios/:id` | admin |
+| 15 | POST | `/api/admin/comercios` | admin |
+| 16 | PATCH | `/api/admin/comercios/:id` | admin |
+| 17 | GET | `/api/admin/tarjetas` | admin |
+| 18 | GET | `/api/admin/tarjetas/:id` | admin |
+| 19 | GET | `/api/admin/operaciones` | admin |
+| 20 | POST | `/api/admin/comercios/:idRandomLargo/google-wallet/clase` | admin |
 
 ---
 
@@ -839,6 +886,12 @@ curl -s -X POST $BASE/api/admin/comercios/$ID_RANDOM/google-wallet/clase \
       contraseña** devuelve `201` (reanudación) y NO el error «email ya
       registrado»: tratarlo como alta exitosa. `EMAIL_DUPLICADO` ahora sólo
       aparece con contraseña distinta (ajustar el texto del mensaje).
+- [ ] El formulario de alta **no pide contraseña** (si la manda, el servidor
+      la ignora: manda `USUARIO_PASSWORD`, valor actual `123123`). El login
+      de tarjeta autentica con esa contraseña estándar.
+- [ ] `PATCH /api/comercio/password` cambia la contraseña del comercio:
+      `401 PASSWORD_ACTUAL_INCORRECTA` si la actual no coincide,
+      `400 VALIDATION` si la nueva es corta (< 8).
 - [ ] El login de tarjeta incluye `googleWalletUrl`: si es `string`, se puede
       ofrecer «Guardar en Google Wallet» también desde ahí; si es `null`, no
       mostrar nada.

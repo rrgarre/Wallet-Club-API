@@ -417,6 +417,38 @@ async function main() {
   const { firmarToken } = require('../src/middlewares/auth');
   const tComercioInactivo = firmarToken({ sub: 2, role: 'comercio', nombre: 'Bar Cerrado' });
 
+  // ---------------- CAMBIO DE PASSWORD DE COMERCIO ----------------
+  const IDR_C1 = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6';
+  const cambiarPass = (token, body) =>
+    req('PATCH', '/api/comercio/password', { token, body });
+
+  r = await req('PATCH', '/api/comercio/password', { body: { passwordActual: 'x', passwordNueva: 'NuevaClave123' } });
+  check('cambio password sin token -> 401', r.status === 401, `(${r.status})`);
+
+  r = await cambiarPass(tComercio, { passwordActual: 'mala', passwordNueva: 'NuevaClave123' });
+  check(
+    'cambio password: actual incorrecta -> 401 PASSWORD_ACTUAL_INCORRECTA',
+    r.status === 401 && r.json.error.code === 'PASSWORD_ACTUAL_INCORRECTA',
+    `(${r.status})`
+  );
+
+  r = await cambiarPass(tComercio, { passwordActual: 'Comercio123', passwordNueva: 'corta' });
+  check('cambio password: nueva corta (< MIN_PASSWORD_ADMIN) -> 400', r.status === 400, `(${r.status})`);
+
+  r = await cambiarPass(tComercio, { passwordActual: 'Comercio123', passwordNueva: 'NuevaClave123' });
+  check('cambio password -> 200', r.status === 200 && r.json.ok === true, `(${r.status})`);
+
+  r = await req('POST', '/api/auth/comercio/login', {
+    body: { idRandomLargo: IDR_C1, password: 'NuevaClave123' },
+  });
+  check('login con la password recién cambiada -> 200', r.status === 200, `(${r.status})`);
+
+  r = await cambiarPass(tComercio, { passwordActual: 'NuevaClave123', passwordNueva: 'Comercio123' });
+  check('restaurar la password original -> 200', r.status === 200, `(${r.status})`);
+
+  r = await cambiarPass(tAdmin, { comercioId: 1, passwordActual: 'x', passwordNueva: 'NuevaClave123' });
+  check('admin no puede usar este endpoint -> 403', r.status === 403, `(${r.status})`);
+
   r = await req('POST', '/api/auth/tarjeta/login', { body: { email: 'luis@x.com', password: 'Tarjeta123' } });
   check(
     'login tarjeta ok (con googleWalletUrl null: aún sin clase)',
@@ -447,20 +479,40 @@ async function main() {
   const tNuevo = r.json.token;
   const idNuevo = r.json.usuario.id;
 
-  // Mismo email pero OTRA contraseña => conflicto real (como siempre)
-  r = await req('POST', '/api/registro/tarjeta/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6', {
-    body: { nombre: 'Nuevo', email: 'nuevo@x.com', password: 'claveDistinta1' },
+  // La contraseña NO la manda el front: manda la constante del .env
+  r = await req('POST', '/api/auth/tarjeta/login', {
+    body: { email: 'nuevo@x.com', password: env.usuarioPassword },
   });
-  check('registro email duplicado con contraseña distinta -> 400', r.status === 400, `(${r.status})`);
+  check('login con la contraseña FIJA del .env (USUARIO_PASSWORD)', r.status === 200, `(${r.status})`);
 
-  // REANUDACIÓN: mismo email + MISMA contraseña => 201 con la MISMA tarjeta
+  r = await req('POST', '/api/auth/tarjeta/login', {
+    body: { email: 'nuevo@x.com', password: 'secreto1' },
+  });
+  check('la password enviada en el registro se IGNORA -> 401', r.status === 401, `(${r.status})`);
+
+  // Cuenta HEREDADA con contraseña distinta de la estándar => conflicto
+  const { hashPassword } = require('../src/utils/hash');
+  const filaNueva = store.tarjetas.find((t) => t.id === idNuevo);
+  const hashEstandar = filaNueva.passwordHash;
+  filaNueva.passwordHash = await hashPassword('LegacyClave1');
+  r = await req('POST', '/api/registro/tarjeta/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6', {
+    body: { nombre: 'Nuevo', email: 'nuevo@x.com' },
+  });
+  check(
+    'registro con contraseña NO estándar en BD -> 400 EMAIL_DUPLICADO',
+    r.status === 400 && r.json.error.code === 'EMAIL_DUPLICADO',
+    `(${r.status})`
+  );
+  filaNueva.passwordHash = hashEstandar;
+
+  // REANUDACIÓN: mismo email (sin password en el body) => 201 con la MISMA tarjeta
   const filasAntes = store.tarjetas.filter((t) => t.comercioId === 1).length;
   r = await req('POST', '/api/registro/tarjeta/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6', {
-    body: { nombre: 'Nombre Ignorado', email: 'nuevo@x.com', password: 'secreto1' },
+    body: { nombre: 'Nombre Ignorado', email: 'nuevo@x.com' },
   });
   const filasDespues = store.tarjetas.filter((t) => t.comercioId === 1).length;
   check(
-    'reanudación con misma contraseña -> 201 y MISMA tarjeta',
+    'reanudación (sin password en el body) -> 201 y MISMA tarjeta',
     r.status === 201 && r.json.usuario.id === idNuevo && r.json.token,
     `(${r.status}, id=${r.json?.usuario?.id} esperado ${idNuevo})`
   );
@@ -476,7 +528,11 @@ async function main() {
   );
 
   r = await req('POST', '/api/auth/tarjeta/login', {
-    body: { email: 'nuevo@x.com', password: 'secreto1', comercioId: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6' },
+    body: {
+      email: 'nuevo@x.com',
+      password: env.usuarioPassword,
+      comercioId: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6',
+    },
   });
   check('login tarjeta aceptando idRandomLargo como comercioId', r.status === 200, `(${r.status})`);
 
@@ -797,7 +853,7 @@ async function main() {
 
   // ---- REANUDACIÓN + LOGIN con clase aprobada (reemisión del enlace) ----
   r = await req('POST', '/api/auth/tarjeta/login', {
-    body: { email: 'wallet@x.com', password: 'secreto1' },
+    body: { email: 'wallet@x.com', password: env.usuarioPassword },
   });
   check(
     'login tarjeta con clase aprobada -> googleWalletUrl string',
