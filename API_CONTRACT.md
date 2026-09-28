@@ -16,8 +16,9 @@
 > *v1.5: el QR (`barcode`) de la tarjeta en Google Wallet contiene **sólo el
 > identificador** de la tarjeta, nunca la URL de captura (§3.5).*
 > *v1.6: el registro de tarjeta **no pide contraseña** (la pone el servidor:
-> `USUARIO_PASSWORD`) y hay endpoint nuevo para que el comercio cambie su
-> contraseña (§3.4, §3.5, §5.5). **20 endpoints**.*
+> `USUARIO_PASSWORD`), **ya no devuelve `token`/`role`** (el alta no deja
+> logueado) y hay endpoint nuevo para que el comercio cambie su contraseña
+> (§3.4, §3.5, §5.5). **20 endpoints**.*
 
 ---
 
@@ -244,12 +245,12 @@ comercio pertenece la tarjeta.
 > la pantalla de tarjeta se deja preparada, pero el usuario normal sólo
 > interactúa con sus puntos a través de Google Wallet.
 
-`201` — **devuelve token**: el cliente queda logueado sin llamar al login:
+`201` — **SIN `token` ni `role` (v1.6)**: el navegador que registra **NO
+queda logueado** ni debe auto-redirigirse a la pantalla de usuario; la
+entrada en esa pantalla es manual (§3.4, que sí devuelve token):
 ```json
 {
   "ok": true,
-  "token": "eyJhbGciOiJIUzI1NiIs...",
-  "role": "tarjeta",
   "usuario": { "id": 2, "nombre": "Luis Captura", "email": "luis.cap@ejemplo.com",
                "comercioId": 2, "puntos": 0, "premios": 0,
                "googleWalletObjetoId": "3388000000023208299.USER_2_COMERCIO_5949..." },
@@ -291,7 +292,7 @@ comercio pertenece la tarjeta.
 
 | Situación | Respuesta |
 |---|---|
-| La cuenta usa la **contraseña estándar** (`USUARIO_PASSWORD`) — caso normal de todas las altas nuevas | **`201` con la misma forma que un alta nueva**: `token`, `usuario` (la MISMA fila: id, nombre y saldos originales, sin duplicar) y `googleWalletUrl` regenerado. Caso típico: el usuario vuelve a rellenar el formulario porque no ejecutó el enlace de Google Wallet la primera vez |
+| La cuenta usa la **contraseña estándar** (`USUARIO_PASSWORD`) — caso normal de todas las altas nuevas | **`201` con la misma forma que un alta nueva** (también **sin `token`**): `usuario` (la MISMA fila: id, nombre y saldos originales, sin duplicar) y `googleWalletUrl` regenerado. Caso típico: el usuario vuelve a rellenar el formulario porque no ejecutó el enlace de Google Wallet la primera vez |
 | La cuenta tiene **otra contraseña** (heredada de antes del v1.6) | `400 EMAIL_DUPLICADO` (conflicto real: no se reanuda) |
 | Contraseña estándar pero la tarjeta está **desactivada** | `403 TARJETA_INACTIVA` |
 
@@ -305,7 +306,7 @@ que ya había en BD.
 | Comercio desactivado | `COMERCIO_INACTIVO` | 403 |
 | Email ya registrado con contraseña distinta de la estándar (cuentas heredadas) | `EMAIL_DUPLICADO` | 400 |
 | Reanudación de tarjeta desactivada | `TARJETA_INACTIVA` | 403 |
-| Faltan campos / email inválido / password < 6 | `VALIDATION` | 400 |
+| Faltan campos / email inválido | `VALIDATION` | 400 |
 
 > Un `idRandomLargo` desconocido devuelve `400` (no `404`).
 
@@ -889,6 +890,11 @@ curl -s -X POST $BASE/api/admin/comercios/$ID_RANDOM/google-wallet/clase \
 - [ ] El formulario de alta **no pide contraseña** (si la manda, el servidor
       la ignora: manda `USUARIO_PASSWORD`, valor actual `123123`). El login
       de tarjeta autentica con esa contraseña estándar.
+- [ ] El registro (alta **y** reanudación) **ya NO devuelve `token` ni
+      `role`**: no hay auto-login ni redirección automática a la pantalla
+      de usuario tras registrarse; si el usuario quiere entrar, lo hace a
+      mano con el login (§3.4). No persistir nada de sesión en el navegador
+      a partir de la respuesta del alta.
 - [ ] `PATCH /api/comercio/password` cambia la contraseña del comercio:
       `401 PASSWORD_ACTUAL_INCORRECTA` si la actual no coincide,
       `400 VALIDATION` si la nueva es corta (< 8).

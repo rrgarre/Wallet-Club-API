@@ -473,10 +473,14 @@ async function main() {
   });
   check(
     'registro tarjeta ok -> comercioId deducida = 1',
-    r.status === 201 && r.json.usuario.comercioId === 1 && r.json.token,
+    r.status === 201 && r.json.usuario.comercioId === 1 && r.json.ok === true,
     `(${r.status}, comercioId=${r.json?.usuario?.comercioId})`
   );
-  const tNuevo = r.json.token;
+  check(
+    'el alta NO devuelve token ni role (no auto-login)',
+    !r.json.token && !r.json.role,
+    `(token=${!!r.json.token}, role=${r.json?.role})`
+  );
   const idNuevo = r.json.usuario.id;
 
   // La contraseña NO la manda el front: manda la constante del .env
@@ -484,6 +488,9 @@ async function main() {
     body: { email: 'nuevo@x.com', password: env.usuarioPassword },
   });
   check('login con la contraseña FIJA del .env (USUARIO_PASSWORD)', r.status === 200, `(${r.status})`);
+  // El token del usuario recién registrado se obtiene SÓLO por login
+  // (el alta ya no lo da); se usa más abajo en el test de perfil.
+  const tNuevo = r.json.token;
 
   r = await req('POST', '/api/auth/tarjeta/login', {
     body: { email: 'nuevo@x.com', password: 'secreto1' },
@@ -512,8 +519,8 @@ async function main() {
   });
   const filasDespues = store.tarjetas.filter((t) => t.comercioId === 1).length;
   check(
-    'reanudación (sin password en el body) -> 201 y MISMA tarjeta',
-    r.status === 201 && r.json.usuario.id === idNuevo && r.json.token,
+    'reanudación (sin password en el body) -> 201 y MISMA tarjeta, SIN token',
+    r.status === 201 && r.json.usuario.id === idNuevo && !r.json.token && !r.json.role,
     `(${r.status}, id=${r.json?.usuario?.id} esperado ${idNuevo})`
   );
   check(

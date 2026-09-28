@@ -172,6 +172,9 @@ async function loginTarjeta(req, res, next) {
  * pantalla de tarjeta queda preparada, pero el usuario interactúa con
  * sus puntos a través de Google Wallet. Si el body trae `password`, se
  * IGNORA.
+ *
+ * La respuesta 201 NO lleva `token` ni `role`: el navegador que registra
+ * NO queda logueado (login manual aparte, que sí sigue devolviendo token).
  */
 async function registroTarjeta(req, res, next) {
   try {
@@ -199,7 +202,7 @@ async function registroTarjeta(req, res, next) {
     //    ejecutar el enlace de Google Wallet la primera vez). NO se crea
     //    fila nueva ni se tocan saldos: se reemite el enlace sobre la
     //    tarjeta existente y se devuelve la MISMA respuesta que un alta
-    //    nueva (201 + token).
+    //    nueva (201, sin token).
     //    Si la cuenta tiene OTRA contraseña (heredada) => conflicto real.
     const existente = await dbTarjetas.findByEmail(vEmailInput, comercio.id);
     if (existente) {
@@ -211,12 +214,10 @@ async function registroTarjeta(req, res, next) {
       }
       // Ojo: se conservan el NOMBRE y los saldos originales de la fila;
       // los datos del formulario de este reintento se ignoran.
-      const token = firmarToken({ sub: existente.id, role: 'tarjeta', nombre: existente.nombre });
+      // Igual que el alta: 201 SIN token (el navegador no queda logueado).
       const googleWalletUrl = await enlaceGoogleWallet(existente, comercio);
       return res.status(201).json({
         ok: true,
-        token,
-        role: 'tarjeta',
         usuario: {
           id: existente.id,
           nombre: existente.nombre,
@@ -243,17 +244,17 @@ async function registroTarjeta(req, res, next) {
       activo: true,
     });
 
-    const token = firmarToken({ sub: tarjeta.id, role: 'tarjeta', nombre: tarjeta.nombre });
-
     // Google Wallet: si el comercio YA tiene clase creada (y no está en
     // DRAFT), generamos el enlace "Añadir a Google Wallet" de ESTA tarjeta;
     // si no: alta igual y googleWalletUrl = null. (Ver helper de arriba.)
     const googleWalletUrl = await enlaceGoogleWallet(tarjeta, comercio);
 
+    // 201 SIN token: el navegador que registra NO queda logueado (ni
+    // redirigido): si el usuario quiere entrar, lo hace a mano con el
+    // login. El enlace de Wallet no es una credencial (sólo sirve para
+    // guardarse la tarjeta en la Wallet de quien lo abre).
     res.status(201).json({
       ok: true,
-      token,
-      role: 'tarjeta',
       usuario: {
         id: tarjeta.id,
         nombre: tarjeta.nombre,
