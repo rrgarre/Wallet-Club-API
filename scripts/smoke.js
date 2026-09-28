@@ -413,6 +413,20 @@ async function main() {
     body: { idRandomLargo: 'f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1', password: 'Comercio123' },
   });
   check('login comercio inactivo -> 403', r.status === 403, `(${r.status})`);
+
+  r = await req('POST', '/api/auth/comercio/login', {
+    body: { nombre: 'Bar Pruebas', password: 'Comercio123' },
+  });
+  check(
+    'login comercio por NOMBRE ya no existe -> 400 (falta idRandomLargo)',
+    r.status === 400 && r.json.error.code === 'VALIDATION',
+    `(${r.status})`
+  );
+
+  r = await req('POST', '/api/auth/comercio/login', {
+    body: { idRandomLargo: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6', password: 'Comercio123' },
+  });
+  check('login comercio sólo admite idRandomLargo + password -> 200', r.status === 200, `(${r.status})`);
   // Token legítimo de un comercio que DESPUÉS se desactivó (para probar el bloqueo en ruta)
   const { firmarToken } = require('../src/middlewares/auth');
   const tComercioInactivo = firmarToken({ sub: 2, role: 'comercio', nombre: 'Bar Cerrado' });

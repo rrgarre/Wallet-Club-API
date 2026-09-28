@@ -17,8 +17,9 @@
 > identificador** de la tarjeta, nunca la URL de captura (§3.5).*
 > *v1.6: el registro de tarjeta **no pide contraseña** (la pone el servidor:
 > `USUARIO_PASSWORD`), **ya no devuelve `token`/`role`** (el alta no deja
-> logueado) y hay endpoint nuevo para que el comercio cambie su contraseña
-> (§3.4, §3.5, §5.5). **20 endpoints**.*
+> logueado), el login de comercio **sólo admite `idRandomLargo`** (sin
+> `nombre`) y hay endpoint nuevo para que el comercio cambie su contraseña
+> (§3.3, §3.4, §3.5, §5.5). **20 endpoints**.*
 
 ---
 
@@ -166,8 +167,11 @@ Toda respuesta es JSON con una de estas dos formas:
 | Body | Tipo | Req. |
 |---|---|---|
 | `password` | string | ✅ |
-| `idRandomLargo` | string | *uno de los dos* |
-| `nombre` | string | *uno de los dos* |
+| `idRandomLargo` | string | ✅ |
+
+> **v1.6**: el login de comercio **sólo acepta `idRandomLargo` + `password`**.
+> Se eliminó el login por `nombre`: si llega `nombre` sin `idRandomLargo`
+> (o falta el id), la API responde `400 VALIDATION` (campo obligatorio).
 
 ```json
 {
@@ -181,6 +185,7 @@ Toda respuesta es JSON con una de estas dos formas:
   }
 }
 ```
+- `400 VALIDATION` — falta `idRandomLargo` (o se mandó sólo `nombre`).
 - `401 BAD_CREDENTIALS` (password incorrecta **o** comercio inexistente: mismo error).
 - `403 COMERCIO_INACTIVO` — credenciales correctas pero comercio desactivado.
 
@@ -898,6 +903,8 @@ curl -s -X POST $BASE/api/admin/comercios/$ID_RANDOM/google-wallet/clase \
 - [ ] `PATCH /api/comercio/password` cambia la contraseña del comercio:
       `401 PASSWORD_ACTUAL_INCORRECTA` si la actual no coincide,
       `400 VALIDATION` si la nueva es corta (< 8).
+- [ ] El login de comercio manda **`idRandomLargo` + `password`**: el login
+      por `nombre` ya no existe (`400 VALIDATION` si falta el id).
 - [ ] El login de tarjeta incluye `googleWalletUrl`: si es `string`, se puede
       ofrecer «Guardar en Google Wallet» también desde ahí; si es `null`, no
       mostrar nada.

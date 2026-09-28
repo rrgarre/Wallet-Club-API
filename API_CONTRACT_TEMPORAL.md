@@ -1,4 +1,4 @@
-# Wallet Club API — CONTRATO TEMPORAL: alta de tarjeta SIN token (v1.6)
+# Wallet Club API — CONTRATO TEMPORAL: login de comercio SÓLO por idRandomLargo (v1.6)
 
 > **Fichero desechable.** Contiene ÚNICAMENTE la información que hay que
 > integrar en `API_CONTRACT.md` para **este cambio**. Cuando haya otro
@@ -9,62 +9,50 @@
 
 ---
 
-## 1. `POST /api/registro/tarjeta/:idRandomLargo` — la respuesta ya NO lleva token
+## 1. `POST /api/auth/comercio/login` — se eliminó el login por `nombre`
 
-**No cambia la petición** (mismo body: `nombre`, `email`, sin `password`).
-**Cambia la respuesta `201`**: se eliminan los campos `token` y `role`.
+**Cambia la petición.** Antes se aceptaba `idRandomLargo` **o** `nombre`
+(uno de los dos) + `password`. Ahora **sólo `idRandomLargo` + `password`**:
 
 ### Antes
 
 ```json
-{
-  "ok": true,
-  "token": "eyJhbGciOiJIUzI1NiIs...",
-  "role": "tarjeta",
-  "usuario": { "...": "..." },
-  "comercio": { "id": 5, "nombre": "Chiringuito" },
-  "googleWalletUrl": "https://pay.google.com/gp/v/save/eyJhbGciOiJSUzI1NiIs..."
-}
+{ "nombre": "Café Central", "password": "..." }      // valía
+{ "idRandomLargo": "5949aef4...", "password": "..." } // valía
 ```
 
 ### Ahora
 
 ```json
-{
-  "ok": true,
-  "usuario": { "...": "..." },
-  "comercio": { "id": 5, "nombre": "Chiringuito" },
-  "googleWalletUrl": "https://pay.google.com/gp/v/save/eyJhbGciOiJSUzI1NiIs..."
-}
+{ "idRandomLargo": "5949aef4b6e7e66be2a4c04e0a723c92d618d6e3bcac6b43", "password": "..." }
 ```
 
-Se mantiene **todo lo demás**: `usuario`, `comercio` y `googleWalletUrl`
-(el enlace «Guardar en Google Wallet» sigue saliendo aquí, que es para lo
-que sirve el alta).
+| Situación | Respuesta |
+|---|---|
+| `idRandomLargo` + `password` correctos | `200` con `token`/`role` (igual que siempre) |
+| Sólo `nombre` (o sin `idRandomLargo`) | `400 VALIDATION` — campo `idRandomLargo` obligatorio |
+| id correcto + password mala | `401 BAD_CREDENTIALS` (igual que siempre) |
+| Cuenta desactivada | `403 COMERCIO_INACTIVO` (igual que siempre) |
+
+**La respuesta `200` no cambia** (mismos campos: `token`, `role`,
+`usuario`). Sólo cambia qué se manda en la petición.
 
 ---
 
 ## 2. Qué tiene que cambiar el front
 
-- **Quitar el auto-login tras el alta**: al recibir el `201` del registro
-  ya **no hay token que guardar** → no persistir sesión en el navegador a
-  partir de esa respuesta y **no redirigir automáticamente** a la pantalla
-  de usuario/tarjeta.
-- En su sitio, pantalla normal de confirmación (con el botón «Guardar en
-  Google Wallet» si `googleWalletUrl` es `string`).
-- Si el usuario quiere entrar a su pantalla, lo hace **a mano** con el
-  login: `POST /api/auth/tarjeta/login` **sigue devolviendo `token` y
-  `role` igual que siempre** (su contraseña también: no cambia nada).
-- **La reanudación del alta** (mismo email, §3.5) tiene **la misma forma**
-  que el alta → tampoco devuelve token.
+- En la pantalla de login de comercio, si se puede entrar con el **nombre**
+  del comercio, hay que **quitarse esa opción**: el identificador que se
+  manda es siempre el **`idRandomLargo`** (la clave de 48 caracteres que la
+  API devuelve en el alta/`GET` de comercios y que el comercio tiene como
+  su «usuario»).
+- Si el formulario no lo tiene ya, habrá que pedirlo/pasarlo: sin él el
+  login devuelve `400`.
 
 ---
 
 ## 3. Ámbito afectado
 
-- El cambio es del endpoint de registro, pero **afecta al flujo completo
-  post-alta** del front (auto-login, redirección y persistencia de sesión
-  tras registrarse): es comportamiento que quizá esté en varios sitios de
-  la interfaz, no sólo en el formulario de alta.
-- **Ningún otro endpoint cambia**: logins, perfil, movimiento, comercio,
-  admin y Google Wallet intactos. Sin migraciones de BD.
+- Cambio **sólo** del endpoint de login de comercio: no afecta a los logins
+  de admin (siguen por `nombre`) ni al de tarjeta (sigue por `email`), ni
+  a ningún endpoint más. Sin migraciones de BD.

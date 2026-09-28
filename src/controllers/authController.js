@@ -30,17 +30,17 @@ async function loginAdmin(req, res, next) {
 }
 
 /**
- * POST /api/auth/comercio/login  { password, idRandomLargo | nombre }
- * El idRandomLargo sólo LOCALIZA al comercio: sin la password no hay token.
+ * POST /api/auth/comercio/login  { password, idRandomLargo }
+ * Sólo se acepta idRandomLargo + password (el login por `nombre` se
+ * eliminó): el idRandomLargo sólo LOCALIZA al comercio, sin la password
+ * no hay token.
  */
 async function loginComercio(req, res, next) {
   try {
     const pass = vPassword(req.body.password, 'password', 1);
-    const { idRandomLargo, nombre } = req.body;
+    const idRandomLargo = texto(req.body.idRandomLargo, 'idRandomLargo', { max: 64 });
 
-    const comercio = idRandomLargo
-      ? await dbComercios.findByIdRandomLargo(texto(idRandomLargo, 'idRandomLargo', { max: 64 }))
-      : await dbComercios.findByNombre(texto(nombre, 'nombre'));
+    const comercio = await dbComercios.findByIdRandomLargo(idRandomLargo);
 
     if (!comercio || !(await verifyPassword(pass, comercio.passwordHash))) {
       throw unauthorized('Credenciales incorrectas', 'BAD_CREDENTIALS');
