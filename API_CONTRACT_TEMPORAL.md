@@ -1,58 +1,55 @@
-# Wallet Club API — CONTRATO TEMPORAL: login de comercio SÓLO por idRandomLargo (v1.6)
+# ⚠️ Cambios temporales pendientes de integrar (v1.7)
 
-> **Fichero desechable.** Contiene ÚNICAMENTE la información que hay que
-> integrar en `API_CONTRACT.md` para **este cambio**. Cuando haya otro
-> cambio de contrato, este fichero se vacía y sólo queda lo nuevo.
-> El contrato definitivo (v1.6) ya lo incluye.
->
-> **Fecha:** 28/09/2026
+> Se vacía en cada actualización: sólo queda el último cambio. Si esta
+> página está vacía, la API está al día con `API_CONTRACT.md`.
 
----
+## Tarjetas con `sistema`: `google` | `apple` (fase 1 informativa)
 
-## 1. `POST /api/auth/comercio/login` — se eliminó el login por `nombre`
+**Alcance amplio (no sólo el registro):** afecta a **5 puntos** de la
+interfaz — registro (§3.5), login de tarjeta (§3.4), perfil (§4.1),
+listados de tarjetas (§5.2 / §7.5) y el campo `googleWallet` del
+movimiento (§5.4). **Sin endpoint nuevo: siguen habiendo 20.** El detalle
+completo está en `API_CONTRACT.md` v1.7; esto es SÓLO lo que el front
+debe cambiar ahora.
 
-**Cambia la petición.** Antes se aceptaba `idRandomLargo` **o** `nombre`
-(uno de los dos) + `password`. Ahora **sólo `idRandomLargo` + `password`**:
+### 1. Registro `POST /api/registro/tarjeta/:idRandomLargo`
 
-### Antes
+- Body nuevo campo **`sistema`**: `"google"` | `"apple"`. **Opcional**:
+  si no llega ⇒ `google` (fronts antiguos siguen funcionando). Otro valor
+  ⇒ `400 VALIDATION`.
+- Respuesta `201` (sigue **sin `token` ni `role`**) añade
+  **`usuario.sistema`**.
+- **Con `sistema: "apple"`**: `googleWalletUrl: null` **siempre** y aparece
+  **`"mensaje": "sistema_apple"`**. No hay lógica de Apple todavía: el
+  front sólo debe reconocer ese literal (no redirigir ni llamar a Apple).
+- **Duplicados por sistema**: el mismo email con `sistema` distinto NO
+  choca — es una **tarjeta nueva e independiente** (fila e id propios).
+  Repetir el registro con el mismo `sistema` = reanudación `201` como
+  hasta ahora (apple incluido: `mensaje: "sistema_apple"`, misma fila).
 
-```json
-{ "nombre": "Café Central", "password": "..." }      // valía
-{ "idRandomLargo": "5949aef4...", "password": "..." } // valía
-```
+### 2. Login de tarjeta `POST /api/auth/tarjeta/login` (pantalla en desuso)
 
-### Ahora
+- `usuario.sistema` añadido; si la tarjeta es `apple`,
+  `googleWalletUrl` es `null`.
+- ⚠ **Efecto conocido**: si un email tiene las **dos** tarjetas (google +
+  apple) y se llama **sin `comercioId`** ⇒ `409 EMAIL_AMBIGUO` (repetir
+  con `comercioId`). No es una regresión: es el login antiguo desambiguando.
 
-```json
-{ "idRandomLargo": "5949aef4b6e7e66be2a4c04e0a723c92d618d6e3bcac6b43", "password": "..." }
-```
+### 3. Movimiento `POST /api/comercio/tarjetas/:id/movimiento`
 
-| Situación | Respuesta |
-|---|---|
-| `idRandomLargo` + `password` correctos | `200` con `token`/`role` (igual que siempre) |
-| Sólo `nombre` (o sin `idRandomLargo`) | `400 VALIDATION` — campo `idRandomLargo` obligatorio |
-| id correcto + password mala | `401 BAD_CREDENTIALS` (igual que siempre) |
-| Cuenta desactivada | `403 COMERCIO_INACTIVO` (igual que siempre) |
+- El campo `googleWallet` puede devolver **`"sistema_apple"`** (tarjeta
+  apple: **no se llama a Google**). El movimiento **está aplicado** igual:
+  no bloquear, no reintentar, no mostrar nada de Google.
 
-**La respuesta `200` no cambia** (mismos campos: `token`, `role`,
-`usuario`). Sólo cambia qué se manda en la petición.
+### 4. Listados / perfil
 
----
+- `sistema` aparece en `GET /api/tarjeta/perfil`, `GET /api/comercio/tarjetas`
+  (y `/:id`) y `GET /api/admin/tarjetas` (y `/:id`).
 
-## 2. Qué tiene que cambiar el front
+### 5. Lo que NO cambia
 
-- En la pantalla de login de comercio, si se puede entrar con el **nombre**
-  del comercio, hay que **quitarse esa opción**: el identificador que se
-  manda es siempre el **`idRandomLargo`** (la clave de 48 caracteres que la
-  API devuelve en el alta/`GET` de comercios y que el comercio tiene como
-  su «usuario»).
-- Si el formulario no lo tiene ya, habrá que pedirlo/pasarlo: sin él el
-  login devuelve `400`.
-
----
-
-## 3. Ámbito afectado
-
-- Cambio **sólo** del endpoint de login de comercio: no afecta a los logins
-  de admin (siguen por `nombre`) ni al de tarjeta (sigue por `email`), ni
-  a ningún endpoint más. Sin migraciones de BD.
+- El alta **sigue sin `token`/`role`**; la contraseña sigue siendo la fija
+  `USUARIO_PASSWORD`; el login de comercio sigue siendo sólo
+  `idRandomLargo` + `password`.
+- **No existe** endpoint para cambiar el `sistema` de una tarjeta ya dada
+  de alta (candidato eliminado del diseño).

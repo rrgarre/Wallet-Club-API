@@ -1,6 +1,6 @@
 # Wallet Club API — Contrato de API
 
-> **Versión 1.6 · documento de interfaz.** Fuente de verdad para cualquier cliente
+> **Versión 1.7 · documento de interfaz.** Fuente de verdad para cualquier cliente
 > (web, móvil, panel, script). Todo lo que no esté documentado aquí **no existe**
 > y no debe asumirse. Los ejemplos de este documento son respuestas **reales**
 > capturadas del servidor en ejecución.
@@ -20,6 +20,14 @@
 > logueado), el login de comercio **sólo admite `idRandomLargo`** (sin
 > `nombre`) y hay endpoint nuevo para que el comercio cambie su contraseña
 > (§3.3, §3.4, §3.5, §5.5). **20 endpoints**.*
+> *v1.7: las tarjetas tienen **`sistema`** (`google` \| `apple`). El registro
+> acepta `sistema` en el body (defecto `google`), los duplicados se miran
+> **por sistema** (mismo email ⇒ 1 tarjeta google + 1 tarjeta apple
+> independientes), las tarjetas apple **no se toca Google Wallet**
+> (`googleWalletUrl: null`, `mensaje: "sistema_apple"`, y el movimiento
+> devuelve `googleWallet: "sistema_apple"`). `sistema` se expone en
+> login/perfil/listados (§3.4, §3.5, §4.1, §5.2, §5.4, §7.5). **Sin endpoint
+> nuevo: sigue habiendo 20**.*
 
 ---
 
@@ -206,7 +214,7 @@ Toda respuesta es JSON con una de estas dos formas:
   "role": "tarjeta",
   "usuario": {
     "id": 2, "nombre": "Luis Captura", "email": "luis.cap@ejemplo.com",
-    "comercioId": 2, "puntos": 5, "premios": 2,
+    "comercioId": 2, "sistema": "google", "puntos": 5, "premios": 2,
     "googleWalletObjetoId": "3388000000023208299.USER_2_COMERCIO_5949..."
   },
   "googleWalletUrl": "https://pay.google.com/gp/v/save/eyJhbGciOiJSUzI1NiIs..."
@@ -223,13 +231,15 @@ Toda respuesta es JSON con una de estas dos formas:
   usuario para (re)guardar la tarjeta en su Wallet en cualquier momento:
   es el camino de recuperación si perdió el enlace del alta. ⚠ Al ser una
   URL «quien la abre se la guarda en su Google Wallet», devuélvela sólo a
-  ese cliente autenticado.
+  ese cliente autenticado. **Tarjeta `apple` (v1.7): `null` siempre.**
+- `usuario.sistema` (v1.7): `"google"` \| `"apple"`.
 - `usuario.googleWalletObjetoId` (v1.4): id del objeto en Google Wallet
-  (`null` si nunca se generó).
+  (`null` si nunca se generó; siempre `null` en tarjetas apple).
 - `401 BAD_CREDENTIALS`.
 - `403 TARJETA_INACTIVA`.
-- `409 EMAIL_AMBIGUO` → el email existe en varios comercios: repetir la
-  llamada añadiendo `comercioId` (acepta el id numérico o el `idRandomLargo`).
+- `409 EMAIL_AMBIGUO` → el email existe en **varias filas** (varios
+  comercios, o el mismo comercio con los dos sistemas): repetir la llamada
+  añadiendo `comercioId` (acepta el id numérico o el `idRandomLargo`).
 
 ---
 
@@ -242,6 +252,7 @@ comercio pertenece la tarjeta.
 |---|---|---|
 | `nombre` | string (1–150) | ✅ |
 | `email` | string válido | ✅ |
+| `sistema` | `"google"` \| `"apple"` | ✗ (defecto `google`) — v1.7 |
 | ~~`password`~~ | — | **no se envía (v1.6)**: la pone el servidor (`USUARIO_PASSWORD`). Si el body la trae, **se ignora** |
 
 > **Contraseña (v1.6).** El servidor guarda SIEMPRE la contraseña estándar
@@ -250,6 +261,13 @@ comercio pertenece la tarjeta.
 > la pantalla de tarjeta se deja preparada, pero el usuario normal sólo
 > interactúa con sus puntos a través de Google Wallet.
 
+> **`sistema` (v1.7).** El front lo manda en el formulario (premarcado según
+> navegador, con desplegable editable). Si falta o viene vacío ⇒ `google`
+> (compatibilidad con front antiguo). Un valor distinto de `google`/`apple`
+> ⇒ `400 VALIDATION`. **Los duplicados se miran por sistema**: el mismo
+> email en el mismo comercio con `sistema` distinto **no choca** — son dos
+> tarjetas **independientes** (fila, id y contadores propios).
+
 `201` — **SIN `token` ni `role` (v1.6)**: el navegador que registra **NO
 queda logueado** ni debe auto-redirigirse a la pantalla de usuario; la
 entrada en esa pantalla es manual (§3.4, que sí devuelve token):
@@ -257,12 +275,20 @@ entrada en esa pantalla es manual (§3.4, que sí devuelve token):
 {
   "ok": true,
   "usuario": { "id": 2, "nombre": "Luis Captura", "email": "luis.cap@ejemplo.com",
-               "comercioId": 2, "puntos": 0, "premios": 0,
+               "comercioId": 2, "sistema": "google", "puntos": 0, "premios": 0,
                "googleWalletObjetoId": "3388000000023208299.USER_2_COMERCIO_5949..." },
   "comercio": { "id": 2, "nombre": "Café Central" },
   "googleWalletUrl": "https://pay.google.com/gp/v/save/eyJhbGciOiJSUzI1NiIs..."
 }
 ```
+
+**Alta apple (v1.7).** Con `sistema: "apple"` la respuesta `201` cambia:
+`usuario.sistema = "apple"`, **`googleWalletUrl: null`** (no se genera ni se
+persiste nada de Google para esa tarjeta) y se añade
+**`"mensaje": "sistema_apple"`**. Ese literal es INFORMATIVO para el front
+(la lógica de Apple Wallet todavía no existe): **no hay `token`, y no debe
+haber ninguna llamada ni redirección a Apple** — la siguiente fase añadirá
+la lógica real.
 
 **`googleWalletUrl`** (nuevo): enlace «Añadir a Google Wallet» de **esta** tarjeta.
 
@@ -293,17 +319,23 @@ entrada en esa pantalla es manual (§3.4, que sí devuelve token):
 - `usuario.googleWalletObjetoId` es el id del objeto en Google Wallet (`null`
   si no se generó enlace).
 
-**Reanudación del alta (v1.4/v1.6).** Si el email **ya existe en ese comercio**:
+**Reanudación del alta (v1.4/v1.6).** Si el email **ya existe en ese comercio
+CON EL MISMO `sistema`**:
 
 | Situación | Respuesta |
 |---|---|
 | La cuenta usa la **contraseña estándar** (`USUARIO_PASSWORD`) — caso normal de todas las altas nuevas | **`201` con la misma forma que un alta nueva** (también **sin `token`**): `usuario` (la MISMA fila: id, nombre y saldos originales, sin duplicar) y `googleWalletUrl` regenerado. Caso típico: el usuario vuelve a rellenar el formulario porque no ejecutó el enlace de Google Wallet la primera vez |
 | La cuenta tiene **otra contraseña** (heredada de antes del v1.6) | `400 EMAIL_DUPLICADO` (conflicto real: no se reanuda) |
 | Contraseña estándar pero la tarjeta está **desactivada** | `403 TARJETA_INACTIVA` |
+| Reanudación de una tarjeta **`apple`** (v1.7) | `201` sobre la MISMA fila, **sin `token`**, `googleWalletUrl: null` y `mensaje: "sistema_apple"` (no se crea fila ni se toca Google; la lógica de reanudación apple llegará en una fase posterior) |
 
 En la reanudación **no se crea fila**, **no se tocan puntos/premios** y los
 campos del formulario del reintento (p. ej. `nombre`) **se ignoran**: manda lo
 que ya había en BD.
+
+> **Email con las dos tarjetas (v1.7).** Si existe la fila `apple` y el front
+> manda `sistema: "google"` (o al revés), **NO es reanudación**: es una alta
+> nueva de la otra tarjeta (fila independiente con `201`).
 
 | Error | Código | HTTP |
 |---|---|---|
@@ -311,7 +343,7 @@ que ya había en BD.
 | Comercio desactivado | `COMERCIO_INACTIVO` | 403 |
 | Email ya registrado con contraseña distinta de la estándar (cuentas heredadas) | `EMAIL_DUPLICADO` | 400 |
 | Reanudación de tarjeta desactivada | `TARJETA_INACTIVA` | 403 |
-| Faltan campos / email inválido | `VALIDATION` | 400 |
+| Faltan campos / email inválido / `sistema` distinto de `google`\|`apple` | `VALIDATION` | 400 |
 
 > Un `idRandomLargo` desconocido devuelve `400` (no `404`).
 
@@ -328,7 +360,8 @@ que ya había en BD.
   "ok": true,
   "tarjeta": {
     "id": 2, "comercioId": 2, "nombre": "Luis Captura",
-    "email": "luis.cap@ejemplo.com", "puntos": 5, "premios": 2,
+    "email": "luis.cap@ejemplo.com", "sistema": "google",
+    "puntos": 5, "premios": 2,
     "activo": 1, "createdAt": "2026-09-23T06:53:26.000Z", "updatedAt": null,
     "googleWalletObjetoId": null
   }
@@ -386,7 +419,7 @@ Todas las tarjetas del comercio (sin paginación, sin filtros).
 
 ```json
 { "ok": true, "total": 1, "tarjetas": [ { "id": 2, "comercioId": 2, "nombre": "Luis Captura",
-    "email": "luis.cap@ejemplo.com", "puntos": 5, "premios": 2, "activo": 1,
+    "email": "luis.cap@ejemplo.com", "sistema": "google", "puntos": 5, "premios": 2, "activo": 1,
     "createdAt": "...", "updatedAt": "...", "googleWalletObjetoId": null } ] }
 ```
 
@@ -443,6 +476,7 @@ También se acepta `comercioId` en el body **sólo si el token es de admin**.
   | `"sincronizado"` | Google confirmó el PATCH de los saldos | Nada que hacer |
   | `"sin_objeto"` | La tarjeta tiene enlace pero el usuario **aún no la ha guardado** en su Wallet (Google devuelve 404) | Nada que hacer (es lo normal hasta que la guarde) |
   | `"error"` | Google no respondió / falló. **El movimiento en nuestra BD sí se aplicó** (fuente de verdad) | Aviso discreto: «Guardado; reintentaremos la sincronización con Google Wallet». El próximo movimiento (o un reintento idempotente) la pone al día |
+  | `"sistema_apple"` | v1.7: la tarjeta es **apple**: **no se llama a Google** (no existe allí). El movimiento sí se aplicó en la BD | Sólo informativo; **no** mostrar nada de Google. La lógica de Apple llegará en una fase posterior |
   | `null` | La tarjeta **no tiene enlace** de Google Wallet (nunca se generó) | No mostrar nada |
 
   ⚠ **Nunca** se debe bloquear ni reintentar el movimiento por este campo: la
@@ -624,7 +658,8 @@ contraseña). Sin campos → `400 VALIDATION`. Devuelve `{ ok, comercio }` con
 
 ### 7.5 `GET /api/admin/tarjetas?comercioId=`
 
-Filtro opcional. Igual que 7.1 pero con `tarjetas`.
+Filtro opcional. Igual que 7.1 pero con `tarjetas` (cada objeto incluye
+también `sistema` — v1.7: `google` \| `apple`).
 
 ### 7.6 `GET /api/admin/tarjetas/:id` → `{ ok, tarjeta }` · `404 TARJETA_NOT_FOUND`
 
@@ -735,7 +770,7 @@ El id queda guardado en el comercio: se puede leer después con
 
 | Code | HTTP | Significado / acción sugerida |
 |---|---|---|
-| `VALIDATION` | 400 | Mostrar `message` tal cual |
+| `VALIDATION` | 400 | Mostrar `message` tal cual (incluye `sistema` distinto de `google`\|`apple`) |
 | `SIN_EFECTO` | 400 | La operación no cambia nada |
 | `TIPO_INVALIDO` | 400 | Corregir el enum |
 | `NOMBRE_REQUERIDO` | 400 | Pedir nombre de camarero y reenviar |
@@ -757,7 +792,7 @@ El id queda guardado en el comercio: se puede leer después con
 | `TARJETA_INACTIVA` | 403 | Tarjeta desactivada |
 | `TARJETA_NOT_FOUND` | 404 | No existe o no pertenece al comercio |
 | `NOT_FOUND` | 404 | Recurso genérico |
-| `EMAIL_AMBIGUO` | 409 | Repetir login con `comercioId` |
+| `EMAIL_AMBIGUO` | 409 | Repetir login con `comercioId` (varios comercios, o mismo comercio con los dos `sistema`) |
 | `IDEMPOTENCIA_CONFLICTO` | 409 | Clave de idempotencia reutilizada con otros datos |
 | `GOOGLE_CLASE_YA_EXISTE` | 409 | La clase de Google Wallet ya existe; informar al usuario |
 | `DUPLICATE` | 409 | Clave única duplicada (carrera) |
@@ -815,6 +850,11 @@ El id queda guardado en el comercio: se puede leer después con
 - ❌ **Google Wallet**: no existe creación de **instancias/tarjetas** (objetos
   individuales), ni `PATCH`/`DELETE` de una clase, ni endpoint de lectura de
   clases. Sólo existe el alta de **clase** (§7.9).
+- ❌ **Apple Wallet**: **no existe ninguna lógica de Apple** (v1.7 es sólo
+  información: `mensaje: "sistema_apple"` en el registro y
+  `googleWallet: "sistema_apple"` en el movimiento). No hay endpoints,
+  llamadas ni redirecciones a Apple. También está descartado el endpoint
+  `PATCH .../sistema` (cambiar el sistema de una tarjeta ya dada de alta).
 
 ---
 
@@ -833,10 +873,10 @@ curl -s -X POST $BASE/api/admin/comercios \
   -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{"nombre":"Café Central","password":"...","puntosPremio":10,"premioDescripcion":"Café gratis"}'
 
-# Alta de cliente (idRandomLargo en la URL)
+# Alta de cliente (idRandomLargo en la URL; sistema opcional: google|apple)
 curl -s -X POST $BASE/api/registro/tarjeta/$ID_RANDOM \
   -H "Content-Type: application/json" \
-  -d '{"nombre":"Luis","email":"luis@x.com","password":"secreto1"}'
+  -d '{"nombre":"Luis","email":"luis@x.com","sistema":"google"}'
 
 # Acumular puntos con idempotencia
 curl -s -X POST $BASE/api/comercio/tarjetas/2/movimiento \
@@ -911,4 +951,16 @@ curl -s -X POST $BASE/api/admin/comercios/$ID_RANDOM/google-wallet/clase \
 - [ ] El QR escaneado de una tarjeta contiene **sólo su identificador**
       (`7`, no una URL): la URL de captura se arma en el lector del front
       (base + identificador).
+- [ ] El registro acepta **`sistema`** (`google`/`apple`, defecto `google`;
+      `400 VALIDATION` con otro valor). Con `apple`, el `201` trae
+      `googleWalletUrl: null` + `mensaje: "sistema_apple"` y **sin `token`**:
+      no llamar ni redirigir a Apple (fase 1: sólo informativo).
+- [ ] El mismo email con **sistemas distintos** son **dos tarjetas
+      independientes**: repetir el registro con el otro `sistema` es un alta
+      nueva (`201`, otra fila), NO un error.
+- [ ] El movimiento de una tarjeta `apple` devuelve
+      `googleWallet: "sistema_apple"`: el movimiento **está aplicado** (la BD
+      manda); no hay nada que sincronizar ni reintentar con Google.
+- [ ] `sistema` está en `usuario` (registro y login), en el perfil y en los
+      listados de tarjetas (comercio y admin).
 - [ ] `error.message` se puede pintar directamente en la interfaz.

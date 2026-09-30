@@ -30,11 +30,19 @@ const TIPOS_VALIDOS = ['acumulacion', 'canje', 'correccion', 'ajuste'];
  * Nunca revierte ni bloquea el movimiento: si Google falla, la BD ya es
  * la fuente de verdad y sólo se marca 'error' para que el cliente lo vea.
  *
- * @param {object} tarjeta con googleWalletObjetoId / puntos / premios
- * @returns {Promise<'sincronizado'|'sin_objeto'|'error'|null>}
+ * v1.7: se bifurca por `tarjeta.sistema`. 'apple' => hueco exacto donde
+ * entrará la lógica de Apple; AHORA sólo devuelve un mensaje y NO se
+ * llama a Google (esa tarjeta no existe allí). 'google' o cualquier otro
+ * valor (legacy) => sincronización de siempre.
+ *
+ * @param {object} tarjeta con sistema / googleWalletObjetoId / puntos / premios
+ * @returns {Promise<'sincronizado'|'sin_objeto'|'error'|'sistema_apple'|null>}
  *   null = la tarjeta no tiene (nunca tuvo) enlace de Google Wallet
  */
 async function sincronizarGoogleWallet(tarjeta) {
+  // Rama condicional Apple (v1.7): SÓLO mensaje, cero llamadas a Google.
+  if (tarjeta?.sistema === 'apple') return 'sistema_apple';
+
   const objectId = tarjeta?.googleWalletObjetoId;
   if (!objectId) return null;
   try {

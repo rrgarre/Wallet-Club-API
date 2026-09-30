@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS tarjetas (
   comercioId   INT UNSIGNED NOT NULL,
   nombre       VARCHAR(150) NOT NULL,
   email        VARCHAR(190) NOT NULL,
+  -- Sistema de la tarjeta (v1.7): 'google' | 'apple'. El mismo email
+  -- puede tener 1 tarjeta por sistema (son independientes entre sí).
+  sistema      VARCHAR(10)  NOT NULL DEFAULT 'google',
   puntos       INT          NOT NULL DEFAULT 0,
   premios      INT          NOT NULL DEFAULT 0,
   passwordHash VARCHAR(255) NOT NULL,
@@ -57,7 +60,7 @@ CREATE TABLE IF NOT EXISTS tarjetas (
   createdAt    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updatedAt    TIMESTAMP    NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uq_tarjetas_comercio_email (comercioId, email),
+  UNIQUE KEY uq_tarjetas_comercio_email (comercioId, email, sistema),
   KEY ix_tarjetas_comercio (comercioId),
   CONSTRAINT fk_tarjetas_comercio
     FOREIGN KEY (comercioId) REFERENCES comercios (id)

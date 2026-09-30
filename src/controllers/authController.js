@@ -136,8 +136,10 @@ async function loginTarjeta(req, res, next) {
     // Google Wallet: enlace REGENERADO (misma lógica que en el alta) para
     // que el usuario pueda (re)guardar su tarjeta desde el login. Añadido
     // es a la respuesta: si el comercio no tiene clase aprobada => null.
+    // Tarjeta apple => null (v1.7: aún sin lógica de Apple).
     const comercio = await dbComercios.findById(tarjeta.comercioId);
-    const googleWalletUrl = await enlaceGoogleWallet(tarjeta, comercio);
+    const googleWalletUrl =
+      tarjeta.sistema === 'apple' ? null : await enlaceGoogleWallet(tarjeta, comercio);
 
     const token = firmarToken({ sub: tarjeta.id, role: 'tarjeta', nombre: tarjeta.nombre });
     res.json({
@@ -149,6 +151,7 @@ async function loginTarjeta(req, res, next) {
         nombre: tarjeta.nombre,
         email: tarjeta.email,
         comercioId: tarjeta.comercioId,
+        sistema: tarjeta.sistema ?? 'google',
         puntos: tarjeta.puntos,
         premios: tarjeta.premios,
         googleWalletObjetoId: tarjeta.googleWalletObjetoId ?? null,
@@ -161,7 +164,23 @@ async function loginTarjeta(req, res, next) {
 }
 
 /**
- * POST /api/registro/tarjeta/:idRandomLargo   { nombre, email }
+ * Sistema de la tarjeta (v1.7): 'google' | 'apple'.
+ * Viene del formulario de registro (premarcado según navegador). Si NO
+ * llega (front antiguo) => 'google' (compatibilidad total).
+ */
+function validarSistema(valor) {
+  if (valor === undefined || valor === null || String(valor).trim() === '') {
+    return 'google';
+  }
+  const sistema = String(valor).trim().toLowerCase();
+  if (!['google', 'apple'].includes(sistema)) {
+    throw badRequest("El campo 'sistema' debe ser 'google' o 'apple'", 'VALIDATION');
+  }
+  return sistema;
+}
+
+/**
+ * POST /api/registro/tarjeta/:idRandomLargo   { nombre, email, sistema? }
  *
  * El idRandomLargo sólo IDENTIFICA el comercio destino en esta ruta
  * pública: no da acceso a nada privado del comercio. La comercioId se
@@ -192,11 +211,16 @@ async function registroTarjeta(req, res, next) {
     // 2) Datos del cliente
     const nombre = texto(req.body.nombre, 'nombre', { max: 150 });
     const vEmailInput = vEmail(req.body.email);
+    // Sistema de la tarjeta (v1.7): decide contra qué fila se buscan
+    // duplicados (el mismo email puede tener 1 google + 1 apple, y son
+    // tarjetas INDEPENDIENTES, con id y contadores propios).
+    const sistema = validarSistema(req.body.sistema);
     // Contraseña FIJA del .env: NUNCA se toma la del front (si el body
     // trae `password`, se ignora). Ver USUARIO_PASSWORD en env.js.
     const pass = env.usuarioPassword;
 
-    // 3) Email ya registrado en este comercio => ¿REANUDAR EL ALTA?
+    // 3) Email ya registrado en este comercio Y CON EL MISMO SISTEMA =>
+    //    ¿REANUDAR EL ALTA?
     //    Si la contraseña de la cuenta es la estándar (USUARIO_PASSWORD)
     //    es el MISMO usuario que reintenta (caso típico: no llegó a
     //    ejecutar el enlace de Google Wallet la primera vez). NO se crea
@@ -204,7 +228,12 @@ async function registroTarjeta(req, res, next) {
     //    tarjeta existente y se devuelve la MISMA respuesta que un alta
     //    nueva (201, sin token).
     //    Si la cuenta tiene OTRA contraseña (heredada) => conflicto real.
-    const existente = await dbTarjetas.findByEmail(vEmailInput, comercio.id);
+    //    Si sólo existe una fila de OTRO sistema => se crea fila nueva
+    //    (alta nueva e independiente: otro sistema = otra tarjeta).
+    //    Apple: la lógica de reanudación apple aún NO está diseñada
+    //    (v1.7): misma respuesta informativa `mensaje: "sistema_apple"`,
+    //    sin enlace de Google y sin token.
+    const existente = await dbTarjetas.findByEmail(vEmailInput, comercio.id, sistema);
     if (existente) {
       if (!(await verifyPassword(pass, existente.passwordHash))) {
         throw badRequest('Ya existe una tarjeta con ese email en este comercio', 'EMAIL_DUPLICADO');
@@ -215,7 +244,8 @@ async function registroTarjeta(req, res, next) {
       // Ojo: se conservan el NOMBRE y los saldos originales de la fila;
       // los datos del formulario de este reintento se ignoran.
       // Igual que el alta: 201 SIN token (el navegador no queda logueado).
-      const googleWalletUrl = await enlaceGoogleWallet(existente, comercio);
+      const googleWalletUrl =
+        sistema === 'apple' ? null : await enlaceGoogleWallet(existente, comercio);
       return res.status(201).json({
         ok: true,
         usuario: {
@@ -223,12 +253,14 @@ async function registroTarjeta(req, res, next) {
           nombre: existente.nombre,
           email: existente.email,
           comercioId: existente.comercioId,
+          sistema: existente.sistema ?? 'google',
           puntos: existente.puntos,
           premios: existente.premios,
           googleWalletObjetoId: existente.googleWalletObjetoId ?? null,
         },
         comercio: { id: comercio.id, nombre: comercio.nombre },
         googleWalletUrl,
+        ...(sistema === 'apple' ? { mensaje: 'sistema_apple' } : {}),
       });
     }
 
@@ -242,12 +274,16 @@ async function registroTarjeta(req, res, next) {
       puntos: 0,
       premios: 0,
       activo: true,
+      sistema,
     });
 
     // Google Wallet: si el comercio YA tiene clase creada (y no está en
     // DRAFT), generamos el enlace "Añadir a Google Wallet" de ESTA tarjeta;
     // si no: alta igual y googleWalletUrl = null. (Ver helper de arriba.)
-    const googleWalletUrl = await enlaceGoogleWallet(tarjeta, comercio);
+    // Apple => null + mensaje informativo (v1.7: sin lógica Apple aún);
+    // NO se genera ni se persiste objeto de Google para una tarjeta apple.
+    const googleWalletUrl =
+      sistema === 'apple' ? null : await enlaceGoogleWallet(tarjeta, comercio);
 
     // 201 SIN token: el navegador que registra NO queda logueado (ni
     // redirigido): si el usuario quiere entrar, lo hace a mano con el
@@ -260,12 +296,14 @@ async function registroTarjeta(req, res, next) {
         nombre: tarjeta.nombre,
         email: tarjeta.email,
         comercioId: tarjeta.comercioId,
+        sistema: tarjeta.sistema ?? 'google',
         puntos: tarjeta.puntos,
         premios: tarjeta.premios,
         googleWalletObjetoId: tarjeta.googleWalletObjetoId ?? null,
       },
       comercio: { id: comercio.id, nombre: comercio.nombre },
       googleWalletUrl,
+      ...(sistema === 'apple' ? { mensaje: 'sistema_apple' } : {}),
     });
   } catch (err) {
     next(err);

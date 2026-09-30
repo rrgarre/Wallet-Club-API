@@ -2,9 +2,10 @@
 //  Acceso a datos: tarjetas (clientes)
 // =====================================================================
 const { get, query, execute } = require('./connection');
+const { conflict } = require('../utils/errors');
 
 const COLUMNA_SAFE =
-  'id, comercioId, nombre, email, puntos, premios, activo, createdAt, updatedAt, googleWalletObjetoId';
+  'id, comercioId, nombre, email, sistema, puntos, premios, activo, createdAt, updatedAt, googleWalletObjetoId';
 
 async function findById(id) {
   return get('SELECT * FROM tarjetas WHERE id = ?', [id]);
@@ -17,8 +18,20 @@ async function findByIdSafe(id) {
 /**
  * Login por email. Si el email existe en varios comercios hay que
  * indicar comercioId para desambiguar.
+ *
+ * v1.7: con `sistema` se busca la tarjeta de UN sistema concreto
+ * ('google' | 'apple'); el mismo email puede tener una tarjeta por
+ * sistema (son independientes). Sin `sistema` (login antiguo) se
+ * devuelve la primera fila que encaje.
  */
-async function findByEmail(email, comercioId = null) {
+async function findByEmail(email, comercioId = null, sistema = null) {
+  if (comercioId && sistema) {
+    return get('SELECT * FROM tarjetas WHERE email = ? AND comercioId = ? AND sistema = ?', [
+      email,
+      comercioId,
+      sistema,
+    ]);
+  }
   if (comercioId) {
     return get('SELECT * FROM tarjetas WHERE email = ? AND comercioId = ?', [
       email,
@@ -27,12 +40,12 @@ async function findByEmail(email, comercioId = null) {
   }
   const filas = await query('SELECT * FROM tarjetas WHERE email = ?', [email]);
   if (filas.length > 1) {
-    const err = new Error(
-      'El email está asociado a varios comercios: indica comercioId (idRandomLargo del comercio)'
+    // AppError (no Error pelado): el errorHandler sólo honra AppError,
+    // si no, esta ambigüedad caería a 500 INTERNAL en vez de 409.
+    throw conflict(
+      'El email está asociado a varios comercios: indica comercioId (idRandomLargo del comercio)',
+      'EMAIL_AMBIGUO'
     );
-    err.status = 409;
-    err.code = 'EMAIL_AMBIGUO';
-    throw err;
   }
   return filas[0];
 }
@@ -85,8 +98,8 @@ async function updateSaldos(conn, tarjetaId, puntos, premios) {
 
 async function create(datos) {
   const result = await execute(
-    `INSERT INTO tarjetas (comercioId, nombre, email, puntos, premios, passwordHash, activo)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO tarjetas (comercioId, nombre, email, puntos, premios, passwordHash, activo, sistema)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       datos.comercioId,
       datos.nombre,
@@ -95,6 +108,7 @@ async function create(datos) {
       datos.premios ?? 0,
       datos.passwordHash,
       datos.activo === false ? 0 : 1,
+      datos.sistema ?? 'google',
     ]
   );
   return findById(result.insertId);

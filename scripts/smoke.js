@@ -43,6 +43,7 @@ function run(sqlRaw, params = []) {
       premios: params[4],
       passwordHash: params[5],
       activo: params[6],
+      sistema: params[7] ?? 'google',
       createdAt: new Date().toISOString(),
       updatedAt: null,
     };
@@ -204,6 +205,15 @@ function run(sqlRaw, params = []) {
       rows: store.comercios.map(({ passwordHash, ...r }) => r),
     };
   }
+  if (/FROM tarjetas WHERE email = \? AND comercioId = \? AND sistema = \?/.test(s)) {
+    const row = store.tarjetas.find(
+      (t) =>
+        t.email === params[0] &&
+        t.comercioId === Number(params[1]) &&
+        (t.sistema ?? 'google') === params[2]
+    );
+    return { kind: 'rows', rows: row ? [{ ...row }] : [] };
+  }
   if (/FROM tarjetas WHERE email = \? AND comercioId = \?/.test(s)) {
     const row = store.tarjetas.find((t) => t.email === params[0] && t.comercioId === Number(params[1]));
     return { kind: 'rows', rows: row ? [{ ...row }] : [] };
@@ -299,6 +309,7 @@ async function seed() {
       comercioId: 1,
       nombre: 'Luis',
       email: 'luis@x.com',
+      sistema: 'google',
       puntos: 0,
       premios: 0,
       passwordHash: await hashPassword('Tarjeta123'),
@@ -311,6 +322,7 @@ async function seed() {
       comercioId: 2,
       nombre: 'Otra',
       email: 'otro@x.com',
+      sistema: 'google',
       puntos: 0,
       premios: 0,
       passwordHash: await hashPassword('Tarjeta123'),
@@ -999,6 +1011,140 @@ async function main() {
     'reintento duplicado -> 200 con googleWallet (reintento de sync)',
     r.status === 200 && r.json.duplicado === true && r.json.googleWallet === 'sincronizado',
     `(${r.status}, gw=${r.json?.googleWallet})`
+  );
+
+  // ---------------- SISTEMAS (google / apple) ----------------
+  // El front manda `sistema` en el formulario de registro; sin él => 'google'
+  r = await req('POST', '/api/registro/tarjeta/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6', {
+    body: { nombre: 'Sin Sistema', email: 'sistema-default@x.com' },
+  });
+  check(
+    'registro sin sistema en body -> sistema google por defecto',
+    r.status === 201 && r.json.usuario.sistema === 'google' && r.json.mensaje === undefined,
+    `(${r.status}, sistema=${r.json?.usuario?.sistema})`
+  );
+
+  r = await req('POST', '/api/registro/tarjeta/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6', {
+    body: { nombre: 'Raro', email: 'sistema-raro@x.com', sistema: 'windows' },
+  });
+  check('sistema inválido -> 400 VALIDATION', r.status === 400 && r.json.error.code === 'VALIDATION', `(${r.status})`);
+
+  // --- Apple: alta con mensaje informativo y SIN enlace de Google ---
+  const filasAntesApple = store.tarjetas.length;
+  r = await req('POST', '/api/registro/tarjeta/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6', {
+    body: { nombre: 'Apple User', email: 'apple@x.com', sistema: 'apple' },
+  });
+  const idApple = r.json?.usuario?.id;
+  check(
+    'registro apple -> 201 con mensaje sistema_apple, sin token y googleWalletUrl null',
+    r.status === 201 &&
+      r.json.usuario.sistema === 'apple' &&
+      r.json.mensaje === 'sistema_apple' &&
+      r.json.googleWalletUrl === null &&
+      !r.json.token,
+    `(${r.status}, gw=${r.json?.googleWalletUrl}, msg=${r.json?.mensaje})`
+  );
+  check(
+    'registro apple crea la fila',
+    store.tarjetas.length === filasAntesApple + 1 && !!idApple,
+    `(${filasAntesApple} -> ${store.tarjetas.length})`
+  );
+
+  // --- Mismo email con OTRO sistema => tarjeta NUEVA e independiente ---
+  const filasAntesGemela = store.tarjetas.length;
+  r = await req('POST', '/api/registro/tarjeta/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6', {
+    body: { nombre: 'Gemela Google', email: 'apple@x.com', sistema: 'google' },
+  });
+  const idGemela = r.json?.usuario?.id;
+  check(
+    'mismo email con sistema distinto -> ALTA NUEVA (fila independiente)',
+    r.status === 201 &&
+      store.tarjetas.length === filasAntesGemela + 1 &&
+      !!idGemela &&
+      idGemela !== idApple &&
+      r.json.usuario.sistema === 'google' &&
+      r.json.mensaje === undefined,
+    `(${r.status}, id=${idGemela} vs apple=${idApple})`
+  );
+
+  // --- Bifurcación en el movimiento + contadores independientes ---
+  r = await movGw(idGemela, { puntosDelta: 5, premiosDelta: 0, idempotencia: 'sys-001' });
+  check(
+    'movimiento de la tarjeta google -> googleWallet sincronizado',
+    r.status === 201 && r.json.googleWallet === 'sincronizado',
+    `(${r.status}, gw=${r.json?.googleWallet})`
+  );
+  check(
+    'contadores INDEPENDIENTES: la apple no se mueve',
+    store.tarjetas.find((t) => t.id === idApple).puntos === 0 &&
+      store.tarjetas.find((t) => t.id === idGemela).puntos === 5,
+    `apple=${store.tarjetas.find((t) => t.id === idApple).puntos}, google=${store.tarjetas.find((t) => t.id === idGemela).puntos}`
+  );
+
+  const syncAntesApple = global.__ULTIMA_SYNC;
+  r = await movGw(idApple, { puntosDelta: 5, premiosDelta: 0, idempotencia: 'sys-002' });
+  check(
+    'movimiento de la tarjeta apple -> googleWallet "sistema_apple"',
+    r.status === 201 && r.json.googleWallet === 'sistema_apple',
+    `(${r.status}, gw=${r.json?.googleWallet})`
+  );
+  check(
+    'movimiento apple: los puntos SÍ se aplican en la BD',
+    store.tarjetas.find((t) => t.id === idApple).puntos === 5,
+    `p=${store.tarjetas.find((t) => t.id === idApple).puntos}`
+  );
+  check(
+    'movimiento apple NO llama a Google',
+    global.__ULTIMA_SYNC === syncAntesApple,
+    JSON.stringify(global.__ULTIMA_SYNC)
+  );
+
+  // --- Reanudación apple: mensaje informativo, MISMA fila, sin token ---
+  const filasAntesReanApple = store.tarjetas.length;
+  r = await req('POST', '/api/registro/tarjeta/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6', {
+    body: { nombre: 'Otra Vez Apple', email: 'apple@x.com', sistema: 'apple' },
+  });
+  check(
+    'reanudación apple -> 201 con mensaje, MISMA fila y sin token',
+    r.status === 201 &&
+      r.json.usuario.id === idApple &&
+      r.json.mensaje === 'sistema_apple' &&
+      r.json.googleWalletUrl === null &&
+      !r.json.token &&
+      store.tarjetas.length === filasAntesReanApple,
+    `(${r.status}, id=${r.json?.usuario?.id})`
+  );
+
+  // --- Sistema visible en login/perfil (y login depre con 2 filas => 409) ---
+  r = await req('POST', '/api/auth/tarjeta/login', {
+    body: { email: 'apple@x.com', password: env.usuarioPassword },
+  });
+  check(
+    'login con email en 2 sistemas y sin comercioId -> 409 EMAIL_AMBIGUO',
+    r.status === 409 && r.json.error.code === 'EMAIL_AMBIGUO',
+    `(${r.status}, code=${r.json?.error?.code})`
+  );
+
+  r = await req('POST', '/api/auth/tarjeta/login', {
+    body: { email: 'apple@x.com', password: env.usuarioPassword, comercioId: 1 },
+  });
+  const rLoginApple = r;
+  check(
+    'login tarjeta (con comercioId) -> usuario.sistema expuesto',
+    rLoginApple.status === 200 && ['google', 'apple'].includes(rLoginApple.json.usuario.sistema),
+    `(${rLoginApple.status}, sistema=${rLoginApple.json?.usuario?.sistema})`
+  );
+  check(
+    'login de tarjeta apple -> googleWalletUrl null',
+    rLoginApple.status === 200 && rLoginApple.json.googleWalletUrl === null,
+    `(${rLoginApple.status}, gw=${rLoginApple.json?.googleWalletUrl})`
+  );
+  const tApple = rLoginApple.json.token;
+  r = await req('GET', '/api/tarjeta/perfil', { token: tApple });
+  check(
+    'perfil de tarjeta expone sistema',
+    r.status === 200 && r.json.tarjeta.sistema === 'apple',
+    `(${r.status}, sistema=${r.json?.tarjeta?.sistema})`
   );
 
   // ---------------- resumen ----------------
