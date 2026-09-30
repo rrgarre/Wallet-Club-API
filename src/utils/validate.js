@@ -47,6 +47,21 @@ function password(valor, campo = 'password', min = 6) {
   return limpio;
 }
 
+/**
+ * Nombre de usuario del comercio (login): 3-32, sólo [a-z0-9_],
+ * guardado y comparado en MINÚSCULAS ('Luis_87' = 'luis_87').
+ */
+function nombreUsuario(valor, campo = 'nombreUsuario') {
+  const limpio = texto(valor, campo, { min: 3, max: 32 }).toLowerCase();
+  if (!/^[a-z0-9_]+$/.test(limpio)) {
+    throw badRequest(
+      `El campo '${campo}' sólo puede llevar letras (a-z), números y guion bajo (3-32 caracteres)`,
+      'VALIDATION'
+    );
+  }
+  return limpio;
+}
+
 function positivo(valor, campo, { requerido = true, defecto } = {}) {
   const n = entero(valor, campo, { requerido, defecto });
   if (n <= 0) throw badRequest(`El campo '${campo}' debe ser mayor que 0`, 'VALIDATION');
@@ -81,4 +96,4 @@ function idParam(valor, campo = 'id') {
   return n;
 }
 
-module.exports = { entero, texto, email, password, positivo, idParam, urlHttps, colorHex };
+module.exports = { entero, texto, email, password, nombreUsuario, positivo, idParam, urlHttps, colorHex };

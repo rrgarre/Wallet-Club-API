@@ -8,7 +8,7 @@ const googleWallet = require('../services/googleWalletService');
 const { firmarToken } = require('../middlewares/auth');
 const { hashPassword, verifyPassword } = require('../utils/hash');
 const { unauthorized, forbidden, badRequest } = require('../utils/errors');
-const { texto, email: vEmail, password: vPassword } = require('../utils/validate');
+const { texto, email: vEmail, password: vPassword, nombreUsuario: vNombreUsuario } = require('../utils/validate');
 const { env } = require('../config/env');
 
 /** POST /api/auth/admin/login  { nombre, password } */
@@ -30,33 +30,50 @@ async function loginAdmin(req, res, next) {
 }
 
 /**
- * POST /api/auth/comercio/login  { password, idRandomLargo }
- * Sólo se acepta idRandomLargo + password (el login por `nombre` se
- * eliminó): el idRandomLargo sólo LOCALIZA al comercio, sin la password
- * no hay token.
+ * POST /api/auth/comercio/login  { nombreUsuario, password }
+ *
+ * v1.8: el login ya NO usa idRandomLargo (ese sigue siendo el identificador
+ * de la URL de registro, el QR y la clase Google). El nombre de usuario
+ * LOCALIZA al comercio y la contraseña decide el ROL, en este orden:
+ *   1) contra `operarioHash` (camarero) => role 'operario'
+ *   2) si no cuadra, contra el hash del comercio => role 'comercio'
+ * Un comercio heredado sin nombreUsuario (NULL) no puede iniciar sesión
+ * hasta que el admin le asigne uno con PATCH /api/admin/comercios/:id.
  */
 async function loginComercio(req, res, next) {
   try {
     const pass = vPassword(req.body.password, 'password', 1);
-    const idRandomLargo = texto(req.body.idRandomLargo, 'idRandomLargo', { max: 64 });
+    const nombreUsuario = vNombreUsuario(req.body.nombreUsuario);
 
-    const comercio = await dbComercios.findByIdRandomLargo(idRandomLargo);
+    const comercio = await dbComercios.findByNombreUsuario(nombreUsuario);
+    if (!comercio) {
+      throw unauthorized('Credenciales incorrectas', 'BAD_CREDENTIALS');
+    }
 
-    if (!comercio || !(await verifyPassword(pass, comercio.passwordHash))) {
+    // Orden fijado por el producto: PRIMERO se comprueba el hash de
+    // operario; sólo si no cuadra se comprueba el del comercio.
+    let role = null;
+    if (comercio.operarioHash && (await verifyPassword(pass, comercio.operarioHash))) {
+      role = 'operario';
+    } else if (await verifyPassword(pass, comercio.passwordHash)) {
+      role = 'comercio';
+    }
+    if (!role) {
       throw unauthorized('Credenciales incorrectas', 'BAD_CREDENTIALS');
     }
     if (Number(comercio.activo) !== 1) {
       throw forbidden('El comercio está inactivo', 'COMERCIO_INACTIVO');
     }
 
-    const token = firmarToken({ sub: comercio.id, role: 'comercio', nombre: comercio.nombre });
+    const token = firmarToken({ sub: comercio.id, role, nombre: comercio.nombre });
     res.json({
       ok: true,
       token,
-      role: 'comercio',
+      role,
       usuario: {
         id: comercio.id,
         nombre: comercio.nombre,
+        nombreUsuario: comercio.nombreUsuario,
         puntosPremio: comercio.puntosPremio,
         premioDescripcion: comercio.premioDescripcion,
         idRandomLargo: comercio.idRandomLargo,

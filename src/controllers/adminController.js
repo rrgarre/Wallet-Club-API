@@ -6,8 +6,16 @@ const dbTarjetas = require('../db/tarjetas');
 const dbOperaciones = require('../db/operaciones');
 const { hashPassword } = require('../utils/hash');
 const { notFound, badRequest } = require('../utils/errors');
-const { texto, positivo, idParam } = require('../utils/validate');
+const { texto, positivo, idParam, nombreUsuario: vNombreUsuario } = require('../utils/validate');
 const { env } = require('../config/env');
+
+/** El nombre de usuario es único global (el login ya no lleva idRandomLargo). */
+async function exigirNombreUsuarioLibre(nombreUsuario, idExcluido = null) {
+  const dup = await dbComercios.findByNombreUsuario(nombreUsuario);
+  if (dup && dup.id !== idExcluido) {
+    throw badRequest('Ya existe un comercio con ese nombre de usuario', 'USUARIO_DUPLICADO');
+  }
+}
 
 // ------------------------- COMERCIOS ---------------------------------
 
@@ -35,32 +43,46 @@ async function obtenerComercio(req, res, next) {
 
 /**
  * POST /api/admin/comercios
- * Body: { nombre, password, puntosPremio, premioDescripcion?, activo? }
+ * Body: { nombre, nombreUsuario, password, operarioPassword,
+ *         puntosPremio, premioDescripcion?, activo? }
  * Genera el idRandomLargo (identificador NO autenticante).
+ * - `password` = contraseña del comercio (rol 'comercio').
+ * - `operarioPassword` = contraseña de operario/camarero (rol 'operario').
  */
 async function crearComercio(req, res, next) {
   try {
     const nombre = texto(req.body.nombre, 'nombre', { max: 150 });
+    const nombreUsuario = vNombreUsuario(req.body.nombreUsuario);
     const password = texto(req.body.password, 'password', { max: 200 });
     if (password.length < env.minPasswordAdmin) {
       throw badRequest(`La contraseña debe tener al menos ${env.minPasswordAdmin} caracteres`, 'VALIDATION');
+    }
+    const operarioPassword = texto(req.body.operarioPassword, 'operarioPassword', { max: 200 });
+    if (operarioPassword.length < env.minPasswordAdmin) {
+      throw badRequest(
+        `La contraseña de operario debe tener al menos ${env.minPasswordAdmin} caracteres`,
+        'VALIDATION'
+      );
     }
     const puntosPremio = positivo(req.body.puntosPremio ?? 10, 'puntosPremio');
 
     const duplicado = await dbComercios.findByNombre(nombre);
     if (duplicado) throw badRequest('Ya existe un comercio con ese nombre', 'COMERCIO_DUPLICADO');
+    await exigirNombreUsuarioLibre(nombreUsuario);
 
     const comercio = await dbComercios.create({
       nombre,
+      nombreUsuario,
       puntosPremio,
       premioDescripcion: req.body.premioDescripcion
         ? texto(req.body.premioDescripcion, 'premioDescripcion', { max: 255 })
         : null,
       activo: req.body.activo === undefined ? true : Boolean(req.body.activo),
       passwordHash: await hashPassword(password),
+      operarioHash: await hashPassword(operarioPassword),
     });
 
-    const { passwordHash, ...safe } = comercio;
+    const { passwordHash, operarioHash, ...safe } = comercio;
     res.status(201).json({ ok: true, comercio: safe });
   } catch (err) {
     next(err);
@@ -69,7 +91,10 @@ async function crearComercio(req, res, next) {
 
 /**
  * PATCH /api/admin/comercios/:id
- * Body parcial: { nombre?, password?, puntosPremio?, premioDescripcion?, activo? }
+ * Body parcial: { nombre?, nombreUsuario?, password?, operarioPassword?,
+ *                 puntosPremio?, premioDescripcion?, activo? }
+ * Sirve también para rellenar los comercios heredados que quedaron sin
+ * nombre de usuario ni contraseña de operario (NULL desde la migración).
  */
 async function editarComercio(req, res, next) {
   try {
@@ -79,6 +104,7 @@ async function editarComercio(req, res, next) {
 
     const campos = {};
     if (req.body.nombre !== undefined) campos.nombre = texto(req.body.nombre, 'nombre', { max: 150 });
+    if (req.body.nombreUsuario !== undefined) campos.nombreUsuario = vNombreUsuario(req.body.nombreUsuario);
     if (req.body.puntosPremio !== undefined) campos.puntosPremio = positivo(req.body.puntosPremio, 'puntosPremio');
     if (req.body.premioDescripcion !== undefined) {
       campos.premioDescripcion = texto(req.body.premioDescripcion, 'premioDescripcion', {
@@ -97,13 +123,26 @@ async function editarComercio(req, res, next) {
       }
       campos.passwordHash = await hashPassword(password);
     }
+    if (req.body.operarioPassword !== undefined) {
+      const operarioPassword = texto(req.body.operarioPassword, 'operarioPassword', { max: 200 });
+      if (operarioPassword.length < env.minPasswordAdmin) {
+        throw badRequest(
+          `La contraseña de operario debe tener al menos ${env.minPasswordAdmin} caracteres`,
+          'VALIDATION'
+        );
+      }
+      campos.operarioHash = await hashPassword(operarioPassword);
+    }
 
     if (!Object.keys(campos).length) {
       throw badRequest('No hay campos que actualizar', 'VALIDATION');
     }
+    if (campos.nombreUsuario !== undefined) {
+      await exigirNombreUsuarioLibre(campos.nombreUsuario, id);
+    }
 
     const comercio = await dbComercios.update(id, campos);
-    const { passwordHash, ...safe } = comercio;
+    const { passwordHash, operarioHash, ...safe } = comercio;
     res.json({ ok: true, comercio: safe });
   } catch (err) {
     next(err);

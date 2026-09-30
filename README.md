@@ -24,7 +24,7 @@ npm run admin -- miraadmin MiPassword123
 npm run dev     # o npm start
 
 # Comprobación funcional sin necesidad de BD (usa una BD en memoria simulada)
-npm run smoke   ->  113/113 comprobaciones OK
+npm run smoke   ->  131/131 comprobaciones OK
 ```
 
 Comprobar: `GET /health` → `{ ok: true, db: "conectada" }`
@@ -65,14 +65,15 @@ scripts/smoke.js        prueba funcional end-to-end (npm run smoke)
 | Tabla | Campos |
 |---|---|
 | `admins` | id, nombre, passwordHash, createdAt |
-| `comercios` | id, nombre, puntosPremio, premioDescripcion, activo, idRandomLargo, passwordHash, googleWalletClaseId, googleWalletClaseEstado, googleWalletClaseCreadaEn, createdAt, updatedAt |
-| `tarjetas` | id, comercioId, nombre, email, puntos, premios, passwordHash, activo, googleWalletObjetoId, createdAt, updatedAt |
+| `comercios` | id, nombre, nombreUsuario, puntosPremio, premioDescripcion, activo, idRandomLargo, passwordHash, operarioHash, googleWalletClaseId, googleWalletClaseEstado, googleWalletClaseCreadaEn, createdAt, updatedAt |
+| `tarjetas` | id, comercioId, nombre, email, sistema, puntos, premios, passwordHash, activo, googleWalletObjetoId, createdAt, updatedAt |
 | `operaciones` | id, tarjetaId, comercioId, tipo, puntosDelta, premiosDelta, descripcion, nombre, codigoCamarero, idempotenciaKey, createdAt |
 
 - `passwordHash` = bcrypt (10 rounds). La password plana nunca se guarda ni se devuelve.
+  `operarioHash` = la 2ª contraseña (rol `operario`); también bcrypt y **nunca** se devuelve.
 - `idRandomLargo` (48 hex, aleatorio) **identifica** al comercio en la URL de registro.
-  **No es autenticación**: no concede ningún acceso privado; todas las rutas
-  privadas exigen token JWT emitido en un login con password.
+  **No es autenticación** (desde v1.8 ni siquiera sirve para el login): no concede
+  ningún acceso privado; todas las rutas privadas exigen token JWT emitido en un login con password.
 
 ## Endpoints
 
@@ -80,24 +81,25 @@ scripts/smoke.js        prueba funcional end-to-end (npm run smoke)
 | Método | Ruta | Descripción |
 |---|---|---|
 | POST | `/auth/admin/login` | `{ nombre, password }` → token rol `admin` |
-| POST | `/auth/comercio/login` | `{ password, idRandomLargo \| nombre }` → token rol `comercio` (exige `activo`) |
+| POST | `/auth/comercio/login` | `{ nombreUsuario, password }` → token rol `comercio` **u `operario`** (la contraseña de operario manda primero; exige `activo`) |
 | POST | `/auth/tarjeta/login` | `{ email, password, comercioId? }` → token rol `tarjeta` |
-| POST | `/registro/tarjeta/:idRandomLargo` | `{ nombre, email, password }` → **deduce la comercioId** y da de alta al cliente. Devuelve además `googleWalletUrl` (enlace «Añadir a Google Wallet», `null` si el comercio no tiene clase creada) |
+| POST | `/registro/tarjeta/:idRandomLargo` | `{ nombre, email, sistema? }` → **deduce la comercioId** y da de alta al cliente (la contraseña la pone el servidor). Devuelve además `googleWalletUrl` (enlace «Añadir a Google Wallet», `null` si el comercio no tiene clase o si `sistema: "apple"`) |
 
 ### Tarjeta (token `tarjeta`; admin permitido)
 | GET | `/tarjeta/perfil` | Parámetros de la tarjeta (sin hash). Admin: `?tarjetaId=` |
 | GET | `/tarjeta/operaciones` | Historial propio |
 
-### Comercio (token `comercio`; admin permitido; **exige `activo=true`**)
-| GET | `/comercio/perfil` | Datos del comercio (admin: `?comercioId=` o en body) |
-| GET | `/comercio/tarjetas` | Tarjetas del comercio |
-| GET | `/comercio/tarjetas/:id` | Tarjeta sólo si pertenece al comercio logueado |
-| POST | `/comercio/tarjetas/:id/movimiento` | Mover puntos/premios + crear operación |
+### Comercio (token `comercio` u `operario`; admin permitido; **exige `activo=true`**)
+| GET | `/comercio/perfil` | Datos del comercio (rol `comercio`/admin: `?comercioId=` o en body) |
+| GET | `/comercio/tarjetas` | Tarjetas del comercio (rol `comercio`/admin) |
+| GET | `/comercio/tarjetas/:id` | Tarjeta sólo si pertenece al comercio logueado (también rol `operario`: la escaneada) |
+| POST | `/comercio/tarjetas/:id/movimiento` | Mover puntos/premios + crear operación (también rol `operario`) |
+| PATCH | `/comercio/password` | Cambiar la contraseña del comercio (rol `comercio` sólo) |
 
 ### Admin (token `admin`)
 | GET | `/admin/comercios` · `/admin/comercios/:id` |
-| POST | `/admin/comercios` → genera `idRandomLargo` |
-| PATCH | `/admin/comercios/:id` (nombre, password, puntosPremio, premioDescripcion, activo) |
+| POST | `/admin/comercios` → genera `idRandomLargo` (exige `nombreUsuario` y `operarioPassword`) |
+| PATCH | `/admin/comercios/:id` (nombre, nombreUsuario, password, operarioPassword, puntosPremio, premioDescripcion, activo) |
 | POST | `/admin/comercios/:idRandomLargo/google-wallet/clase` → alta de la **CLASE** de Google Wallet (sólo clase, no tarjetas) |
 | GET | `/admin/tarjetas?comercioId=` · `/admin/tarjetas/:id` |
 | GET | `/admin/operaciones?comercioId=&tarjetaId=&tipo=&desde=&hasta=&pagina=&tamano=` |

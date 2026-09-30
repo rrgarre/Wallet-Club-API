@@ -1,6 +1,6 @@
 // =====================================================================
 //  JWT + control de roles
-//  Roles: 'admin' | 'comercio' | 'tarjeta'
+//  Roles: 'admin' | 'comercio' | 'operario' | 'tarjeta'
 //
 //  El idRandomLargo del comercio NO se usa como credencial: el token
 //  sólo se emite en los login (admin/comercio/tarjeta) con password.

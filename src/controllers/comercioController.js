@@ -1,6 +1,8 @@
 // =====================================================================
-//  Controller: comercio (token de rol 'comercio', o admin con comercioId)
-//  Todas las rutas exigen comercio.activo = true (middleware).
+//  Controller: comercio (token de rol 'comercio' u 'operario', o admin
+//  con comercioId). Todas las rutas exigen comercio.activo = true
+//  (middleware). Las rutas que el operario NO alcanza se estrechan en
+//  comercio.routes.js.
 // =====================================================================
 const dbTarjetas = require('../db/tarjetas');
 const dbComercios = require('../db/comercios');
@@ -16,6 +18,7 @@ async function perfil(req, res, next) {
     const {
       id,
       nombre,
+      nombreUsuario,
       puntosPremio,
       premioDescripcion,
       activo,
@@ -29,6 +32,7 @@ async function perfil(req, res, next) {
       comercio: {
         id,
         nombre,
+        nombreUsuario,
         puntosPremio,
         premioDescripcion,
         activo,

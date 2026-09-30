@@ -23,11 +23,18 @@ CREATE TABLE IF NOT EXISTS admins (
 CREATE TABLE IF NOT EXISTS comercios (
   id                INT UNSIGNED NOT NULL AUTO_INCREMENT,
   nombre            VARCHAR(150) NOT NULL,
+  -- Login (v1.8): nombre de usuario ÚNICO global (3-32, [a-z0-9_],
+  -- en minúsculas). NULL = comercio heredado pendiente de rellenar.
+  nombreUsuario     VARCHAR(32)  NULL,
   puntosPremio      INT          NOT NULL DEFAULT 10,
   premioDescripcion VARCHAR(255) NULL,
   activo            TINYINT(1)   NOT NULL DEFAULT 1,
   idRandomLargo     CHAR(48)     NOT NULL,
+  -- 1ª contraseña: la del comercio (rol 'comercio').
   passwordHash      VARCHAR(255) NOT NULL,
+  -- 2ª contraseña (v1.8): la de operario/camarero (rol 'operario').
+  -- En el login se comprueba ANTES que passwordHash.
+  operarioHash      VARCHAR(255) NULL,
   -- Google Wallet: id de la CLASE (plantilla) creada para el comercio
   googleWalletClaseId       VARCHAR(128) NULL,
   googleWalletClaseEstado   VARCHAR(32)  NULL,
@@ -36,6 +43,7 @@ CREATE TABLE IF NOT EXISTS comercios (
   updatedAt         TIMESTAMP    NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_comercios_idRandomLargo (idRandomLargo),
+  UNIQUE KEY uq_comercios_nombreUsuario (nombreUsuario),
   KEY ix_comercios_nombre (nombre)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

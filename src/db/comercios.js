@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const { get, query, execute } = require('./connection');
 
 const COLUMNA_SAFE =
-  'id, nombre, puntosPremio, premioDescripcion, activo, idRandomLargo, createdAt, updatedAt, ' +
+  'id, nombre, nombreUsuario, puntosPremio, premioDescripcion, activo, idRandomLargo, createdAt, updatedAt, ' +
   'googleWalletClaseId, googleWalletClaseEstado, googleWalletClaseCreadaEn';
 
 /** idRandomLargo: 48 caracteres hex (difícil de adivinar, pero NO es autenticación). */
@@ -29,25 +29,37 @@ async function findByNombre(nombre) {
   return get('SELECT * FROM comercios WHERE nombre = ?', [nombre]);
 }
 
+/**
+ * Login (v1.8): el comercio se identifica por SU nombre de usuario
+ * (único global, en minúsculas). NULL = comercio heredado aún sin
+ * rellenar desde admin: no puede iniciar sesión.
+ */
+async function findByNombreUsuario(nombreUsuario) {
+  return get('SELECT * FROM comercios WHERE nombreUsuario = ?', [nombreUsuario]);
+}
+
 async function list() {
   return query(`SELECT ${COLUMNA_SAFE} FROM comercios ORDER BY nombre`);
 }
 
 /**
- * @param {{nombre, puntosPremio, premioDescripcion, activo, passwordHash}} datos
+ * @param {{nombre, nombreUsuario, puntosPremio, premioDescripcion, activo,
+ *          passwordHash, operarioHash}} datos
  */
 async function create(datos) {
   const idRandomLargo = generarIdRandomLargo();
   const result = await execute(
-    `INSERT INTO comercios (nombre, puntosPremio, premioDescripcion, activo, idRandomLargo, passwordHash)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO comercios (nombre, nombreUsuario, puntosPremio, premioDescripcion, activo, idRandomLargo, passwordHash, operarioHash)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       datos.nombre,
+      datos.nombreUsuario ?? null,
       datos.puntosPremio,
       datos.premioDescripcion ?? null,
       datos.activo ? 1 : 0,
       idRandomLargo,
       datos.passwordHash,
+      datos.operarioHash ?? null,
     ]
   );
   return findById(result.insertId);
@@ -56,7 +68,8 @@ async function create(datos) {
 /**
  * Actualización parcial. Sólo se tocan los campos enviados.
  * @param {number} id
- * @param {{nombre?, puntosPremio?, premioDescripcion?, activo?, passwordHash?}} campos
+ * @param {{nombre?, nombreUsuario?, puntosPremio?, premioDescripcion?, activo?,
+ *          passwordHash?, operarioHash?}} campos
  */
 async function update(id, campos) {
   const sets = [];
@@ -65,6 +78,10 @@ async function update(id, campos) {
   if (campos.nombre !== undefined) {
     sets.push('nombre = ?');
     params.push(campos.nombre);
+  }
+  if (campos.nombreUsuario !== undefined) {
+    sets.push('nombreUsuario = ?');
+    params.push(campos.nombreUsuario);
   }
   if (campos.puntosPremio !== undefined) {
     sets.push('puntosPremio = ?');
@@ -81,6 +98,10 @@ async function update(id, campos) {
   if (campos.passwordHash !== undefined) {
     sets.push('passwordHash = ?');
     params.push(campos.passwordHash);
+  }
+  if (campos.operarioHash !== undefined) {
+    sets.push('operarioHash = ?');
+    params.push(campos.operarioHash);
   }
 
   if (!sets.length) return findById(id);
@@ -114,6 +135,7 @@ module.exports = {
   findByIdSafe,
   findByIdRandomLargo,
   findByNombre,
+  findByNombreUsuario,
   list,
   create,
   update,

@@ -54,11 +54,13 @@ function run(sqlRaw, params = []) {
     const c = {
       id: store.next.comercio++,
       nombre: params[0],
-      puntosPremio: params[1],
-      premioDescripcion: params[2],
-      activo: params[3],
-      idRandomLargo: params[4],
-      passwordHash: params[5],
+      nombreUsuario: params[1] ?? null,
+      puntosPremio: params[2],
+      premioDescripcion: params[3],
+      activo: params[4],
+      idRandomLargo: params[5],
+      passwordHash: params[6],
+      operarioHash: params[7] ?? null,
       createdAt: new Date().toISOString(),
       updatedAt: null,
     };
@@ -184,6 +186,12 @@ function run(sqlRaw, params = []) {
   if (/FROM admins/.test(s)) {
     return { kind: 'rows', rows: store.admins.map(({ passwordHash, ...r }) => r) };
   }
+  if (/FROM comercios WHERE nombreUsuario = \?/.test(s)) {
+    const row = store.comercios.find(
+      (c) => c.nombreUsuario != null && c.nombreUsuario === params[0]
+    );
+    return { kind: 'rows', rows: row ? [{ ...row }] : [] };
+  }
   if (/FROM comercios WHERE idRandomLargo = \?/.test(s)) {
     const row = store.comercios.find((c) => c.idRandomLargo === params[0]);
     return { kind: 'rows', rows: row ? [{ ...row }] : [] };
@@ -196,13 +204,14 @@ function run(sqlRaw, params = []) {
     const row = store.comercios.find((c) => c.id === Number(params[0]));
     if (!row) return { kind: 'rows', rows: [] };
     if (/^SELECT \*/i.test(s.trim())) return { kind: 'rows', rows: [{ ...row }] };
-    const { passwordHash, ...resto } = row;
+    // SELECT con COLUMNA_SAFE: nunca passwordHash ni operarioHash
+    const { passwordHash, operarioHash, ...resto } = row;
     return { kind: 'rows', rows: [resto] };
   }
   if (/FROM comercios ORDER BY nombre/.test(s)) {
     return {
       kind: 'rows',
-      rows: store.comercios.map(({ passwordHash, ...r }) => r),
+      rows: store.comercios.map(({ passwordHash, operarioHash, ...r }) => r),
     };
   }
   if (/FROM tarjetas WHERE email = \? AND comercioId = \? AND sistema = \?/.test(s)) {
@@ -283,22 +292,26 @@ async function seed() {
     {
       id: store.next.comercio++,
       nombre: 'Café Central',
+      nombreUsuario: 'cafe_central',
       puntosPremio: 10,
       premioDescripcion: 'Café gratis',
       activo: 1,
       idRandomLargo: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6',
       passwordHash: await hashPassword('Comercio123'),
+      operarioHash: await hashPassword('Operario123'),
       createdAt: new Date().toISOString(),
       updatedAt: null,
     },
     {
       id: store.next.comercio++,
       nombre: 'Bar Cerrado',
+      nombreUsuario: 'bar_cerrado',
       puntosPremio: 5,
       premioDescripcion: null,
       activo: 0,
       idRandomLargo: 'f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1',
       passwordHash: await hashPassword('Comercio123'),
+      operarioHash: await hashPassword('Operario123'),
       createdAt: new Date().toISOString(),
       updatedAt: null,
     }
@@ -411,40 +424,63 @@ async function main() {
   check('login admin password mala -> 401', r.status === 401, `(${r.status})`);
 
   r = await req('POST', '/api/auth/comercio/login', {
-    body: { idRandomLargo: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6', password: 'Comercio123' },
+    body: { nombreUsuario: 'cafe_central', password: 'Comercio123' },
   });
-  check('login comercio ok', r.status === 200 && r.json.token, `(${r.status})`);
+  check(
+    'login comercio ok (nombreUsuario + password) -> role comercio',
+    r.status === 200 && r.json.token && r.json.role === 'comercio',
+    `(${r.status}, role=${r.json?.role})`
+  );
   const tComercio = r.json.token;
 
   r = await req('POST', '/api/auth/comercio/login', {
-    body: { idRandomLargo: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6', password: 'otra' },
+    body: { nombreUsuario: 'cafe_central', password: 'otra' },
   });
-  check('login comercio password mala -> 401 (idRandom no es credencial)', r.status === 401, `(${r.status})`);
+  check('login comercio password mala -> 401', r.status === 401, `(${r.status})`);
 
   r = await req('POST', '/api/auth/comercio/login', {
-    body: { idRandomLargo: 'f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1', password: 'Comercio123' },
+    body: { nombreUsuario: 'bar_cerrado', password: 'Comercio123' },
   });
   check('login comercio inactivo -> 403', r.status === 403, `(${r.status})`);
 
   r = await req('POST', '/api/auth/comercio/login', {
-    body: { nombre: 'Bar Pruebas', password: 'Comercio123' },
+    body: { idRandomLargo: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6', password: 'Comercio123' },
   });
   check(
-    'login comercio por NOMBRE ya no existe -> 400 (falta idRandomLargo)',
+    'login ya NO admite idRandomLargo -> 400 (falta nombreUsuario)',
     r.status === 400 && r.json.error.code === 'VALIDATION',
     `(${r.status})`
   );
 
   r = await req('POST', '/api/auth/comercio/login', {
-    body: { idRandomLargo: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6', password: 'Comercio123' },
+    body: { nombre: 'Café Central', password: 'Comercio123' },
   });
-  check('login comercio sólo admite idRandomLargo + password -> 200', r.status === 200, `(${r.status})`);
+  check(
+    'login por NOMBRE ya no existe -> 400 (falta nombreUsuario)',
+    r.status === 400 && r.json.error.code === 'VALIDATION',
+    `(${r.status})`
+  );
+
+  r = await req('POST', '/api/auth/comercio/login', {
+    body: { nombreUsuario: 'no_existe', password: 'Comercio123' },
+  });
+  check('usuario inexistente -> 401 (no filtra existencia)', r.status === 401, `(${r.status})`);
+
+  // Misma URL de login: la contraseña de OPERARIO decide el rol
+  r = await req('POST', '/api/auth/comercio/login', {
+    body: { nombreUsuario: 'CAFE_CENTRAL', password: 'Operario123' },
+  });
+  check(
+    'login con la contraseña de operario -> role operario (nombreUsuario case-insensitive)',
+    r.status === 200 && r.json.token && r.json.role === 'operario',
+    `(${r.status}, role=${r.json?.role})`
+  );
+  const tOperario = r.json.token;
   // Token legítimo de un comercio que DESPUÉS se desactivó (para probar el bloqueo en ruta)
   const { firmarToken } = require('../src/middlewares/auth');
   const tComercioInactivo = firmarToken({ sub: 2, role: 'comercio', nombre: 'Bar Cerrado' });
 
   // ---------------- CAMBIO DE PASSWORD DE COMERCIO ----------------
-  const IDR_C1 = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6';
   const cambiarPass = (token, body) =>
     req('PATCH', '/api/comercio/password', { token, body });
 
@@ -465,7 +501,7 @@ async function main() {
   check('cambio password -> 200', r.status === 200 && r.json.ok === true, `(${r.status})`);
 
   r = await req('POST', '/api/auth/comercio/login', {
-    body: { idRandomLargo: IDR_C1, password: 'NuevaClave123' },
+    body: { nombreUsuario: 'cafe_central', password: 'NuevaClave123' },
   });
   check('login con la password recién cambiada -> 200', r.status === 200, `(${r.status})`);
 
@@ -674,6 +710,35 @@ async function main() {
   r = await req('GET', '/api/comercio/tarjetas', { token: tTarjeta });
   check('rol tarjeta en rutas de comercio -> 403', r.status === 403, `(${r.status})`);
 
+  // ---------------- PERMISOS DEL OPERARIO (rol 'operario') ----------------
+  r = await req('GET', '/api/comercio/tarjetas/1', { token: tOperario });
+  check('operario SÍ lee la tarjeta escaneada -> 200', r.status === 200 && r.json.tarjeta.id === 1, `(${r.status})`);
+
+  r = await mov(1, { puntosDelta: 2, premiosDelta: 0, idempotencia: 'op-operario-1' }, tOperario);
+  check('operario SÍ mueve los contadores -> 201', r.status === 201 && r.json.tarjeta.puntos !== undefined, `(${r.status})`);
+
+  r = await req('GET', '/api/comercio/tarjetas', { token: tOperario });
+  check(
+    'operario NO ve el listado de tarjetas -> 403',
+    r.status === 403 && r.json.error.code === 'FORBIDDEN_ROLE',
+    `(${r.status})`
+  );
+
+  r = await req('GET', '/api/comercio/perfil', { token: tOperario });
+  check('operario NO ve el perfil de comercio -> 403', r.status === 403, `(${r.status})`);
+
+  r = await req('PATCH', '/api/comercio/password', {
+    token: tOperario,
+    body: { passwordActual: 'Comercio123', passwordNueva: 'NuevaClave123' },
+  });
+  check('operario NO cambia contraseñas -> 403', r.status === 403, `(${r.status})`);
+
+  r = await req('GET', '/api/admin/tarjetas', { token: tOperario });
+  check('operario en rutas de admin -> 403', r.status === 403, `(${r.status})`);
+
+  r = await req('GET', '/api/tarjeta/perfil', { token: tOperario });
+  check('operario en rutas de tarjeta -> 403', r.status === 403, `(${r.status})`);
+
   // ---------------- ADMIN ----------------
   r = await req('GET', '/api/comercio/tarjetas');
   check('admin no infiere comercio sin indicarlo -> 401/403', r.status === 401 || r.status === 403, `(${r.status})`);
@@ -685,27 +750,134 @@ async function main() {
   check('admin sin comercioId -> 400', r.status === 400 && r.json.error.code === 'COMERCIO_REQUERIDO', `(${r.status})`);
 
   r = await req('GET', '/api/admin/comercios', { token: tAdmin });
-  check('admin lista comercios', r.status === 200 && r.json.total === 2, `(${r.status}, total=${r.json?.total})`);
+  check(
+    'admin lista comercios (con nombreUsuario, sin hashes)',
+    r.status === 200 &&
+      r.json.total === 2 &&
+      r.json.comercios.every((c) => c.nombreUsuario && !('passwordHash' in c) && !('operarioHash' in c)),
+    `(${r.status}, total=${r.json?.total})`
+  );
 
   r = await req('GET', '/api/admin/comercios/999', { token: tAdmin });
   check('admin comercio inexistente -> 404', r.status === 404, `(${r.status})`);
 
   r = await req('POST', '/api/admin/comercios', {
     token: tAdmin,
-    body: { nombre: 'Panadería Sol', password: 'Panaderia1', puntosPremio: 7, premioDescripcion: 'Pan gratis' },
+    body: {
+      nombre: 'Panadería Sol',
+      nombreUsuario: 'panaderia_sol',
+      password: 'Panaderia1',
+      operarioPassword: 'OperarioSol1',
+      puntosPremio: 7,
+      premioDescripcion: 'Pan gratis',
+    },
   });
   check(
-    'admin crea comercio -> idRandomLargo de 48',
-    r.status === 201 && r.json.comercio.idRandomLargo.length === 48 && !('passwordHash' in r.json.comercio),
+    'admin crea comercio -> idRandomLargo de 48, nombreUsuario visible y NINGÚN hash',
+    r.status === 201 &&
+      r.json.comercio.idRandomLargo.length === 48 &&
+      r.json.comercio.nombreUsuario === 'panaderia_sol' &&
+      !('passwordHash' in r.json.comercio) &&
+      !('operarioHash' in r.json.comercio),
     `(${r.status})`
   );
   const nuevoIdRandom = r.json?.comercio?.idRandomLargo;
+
+  // Reglas de los campos nuevos en el alta
+  r = await req('POST', '/api/admin/comercios', {
+    token: tAdmin,
+    body: { nombre: 'Sin Usuario', password: 'Panaderia1', operarioPassword: 'OperarioSol1' },
+  });
+  check(
+    'alta sin nombreUsuario -> 400 VALIDATION',
+    r.status === 400 && r.json.error.code === 'VALIDATION',
+    `(${r.status})`
+  );
+
+  r = await req('POST', '/api/admin/comercios', {
+    token: tAdmin,
+    body: { nombre: 'Sin Operario', nombreUsuario: 'sin_operario', password: 'Panaderia1' },
+  });
+  check(
+    'alta sin operarioPassword -> 400 VALIDATION',
+    r.status === 400 && r.json.error.code === 'VALIDATION',
+    `(${r.status})`
+  );
+
+  r = await req('POST', '/api/admin/comercios', {
+    token: tAdmin,
+    body: { nombre: 'Otra Panadería', nombreUsuario: 'panaderia_sol', password: 'Panaderia1', operarioPassword: 'OperarioSol1' },
+  });
+  check(
+    'nombreUsuario repetido -> 400 USUARIO_DUPLICADO',
+    r.status === 400 && r.json.error.code === 'USUARIO_DUPLICADO',
+    `(${r.status}, code=${r.json?.error?.code})`
+  );
+
+  r = await req('POST', '/api/admin/comercios', {
+    token: tAdmin,
+    body: { nombre: 'Formato Malo', nombreUsuario: 'mal formato!', password: 'Panaderia1', operarioPassword: 'OperarioSol1' },
+  });
+  check(
+    'nombreUsuario con formato inválido -> 400',
+    r.status === 400 && r.json.error.code === 'VALIDATION',
+    `(${r.status})`
+  );
+
+  r = await req('POST', '/api/admin/comercios', {
+    token: tAdmin,
+    body: { nombre: 'Operario Corto', nombreUsuario: 'operario_corto', password: 'Panaderia1', operarioPassword: 'corta' },
+  });
+  check(
+    'operarioPassword corta (< MIN_PASSWORD_ADMIN) -> 400',
+    r.status === 400 && r.json.error.code === 'VALIDATION',
+    `(${r.status})`
+  );
 
   r = await req('PATCH', '/api/admin/comercios/1', { token: tAdmin, body: { puntosPremio: 12, activo: false } });
   check('admin edita comercio', r.status === 200 && r.json.comercio.puntosPremio === 12 && r.json.comercio.activo === 0, `(${r.status})`);
 
   r = await req('PATCH', '/api/admin/comercios/1', { token: tAdmin, body: { activo: true, puntosPremio: 10 } });
   check('admin reactiva comercio', r.status === 200 && r.json.comercio.activo === 1, `(${r.status})`);
+
+  // PATCH: rellenar/cambiar usuario y contraseña de operario (y sin hashes)
+  r = await req('PATCH', '/api/admin/comercios/2', {
+    token: tAdmin,
+    body: { nombreUsuario: 'bar_cerrado', operarioPassword: 'OperarioNuevo1' },
+  });
+  check(
+    'PATCH cambia operarioPassword -> 200 con nombreUsuario y sin hashes',
+    r.status === 200 &&
+      r.json.comercio.nombreUsuario === 'bar_cerrado' &&
+      !('passwordHash' in r.json.comercio) &&
+      !('operarioHash' in r.json.comercio),
+    `(${r.status})`
+  );
+
+  r = await req('POST', '/api/auth/comercio/login', {
+    body: { nombreUsuario: 'bar_cerrado', password: 'Operario123' },
+  });
+  check(
+    'la contraseña de operario ANTIGUA ya no sirve -> 401',
+    r.status === 401,
+    `(${r.status})`
+  );
+
+  r = await req('POST', '/api/auth/comercio/login', {
+    body: { nombreUsuario: 'bar_cerrado', password: 'OperarioNuevo1' },
+  });
+  check(
+    'la nueva contraseña de operario autentica -> 403 (comercio inactivo)',
+    r.status === 403 && r.json.error.code === 'COMERCIO_INACTIVO',
+    `(${r.status})`
+  );
+
+  r = await req('PATCH', '/api/admin/comercios/2', { token: tAdmin, body: { nombreUsuario: 'panaderia_sol' } });
+  check(
+    'PATCH con nombreUsuario de OTRO comercio -> 400 USUARIO_DUPLICADO',
+    r.status === 400 && r.json.error.code === 'USUARIO_DUPLICADO',
+    `(${r.status})`
+  );
 
   r = await req('GET', '/api/admin/tarjetas', { token: tAdmin });
   check('admin lista tarjetas', r.status === 200 && r.json.total === 3, `(${r.status}, total=${r.json?.total})`);

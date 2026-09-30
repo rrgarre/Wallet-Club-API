@@ -1,6 +1,11 @@
 // =====================================================================
-//  Rutas del COMERCIO (token rol 'comercio'; admin permitido)
+//  Rutas del COMERCIO (token rol 'comercio' u 'operario'; admin permitido)
 //  Todas exigen comercio ACTIVO.
+//
+//  Operario/camarero (rol 'operario', v1.8): SÓLO puede ver la tarjeta
+//  escaneada (GET /comercio/tarjetas/:id) y mover sus contadores
+//  (POST .../movimiento). NO ve el listado, ni el perfil, ni cambia
+//  contraseñas, ni nada más.
 // =====================================================================
 const express = require('express');
 const { requireAuth, requireRole } = require('../middlewares/auth');
@@ -13,13 +18,15 @@ const router = express.Router();
 router.use(
   '/comercio',
   requireAuth,
-  requireRole('comercio', 'admin'),
+  requireRole('comercio', 'operario', 'admin'),
   resolverComercio,
   exigirComercioActivo
 );
 
-router.get('/comercio/perfil', ctrl.perfil);
-router.get('/comercio/tarjetas', ctrl.listarTarjetas);
+// Sólo comercio/admin: el operario NO consulta estas opciones.
+router.get('/comercio/perfil', requireRole('comercio', 'admin'), ctrl.perfil);
+router.get('/comercio/tarjetas', requireRole('comercio', 'admin'), ctrl.listarTarjetas);
+// La tarjeta ESCANEADA: comercio, operario o admin.
 router.get('/comercio/tarjetas/:id', ctrl.obtenerTarjeta);
 router.post('/comercio/tarjetas/:id/movimiento', ctrl.movimiento);
 // Sólo el propio comercio: el admin restablece contraseñas con

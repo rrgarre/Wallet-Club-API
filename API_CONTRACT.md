@@ -1,6 +1,6 @@
 # Wallet Club API — Contrato de API
 
-> **Versión 1.7 · documento de interfaz.** Fuente de verdad para cualquier cliente
+> **Versión 1.8 · documento de interfaz.** Fuente de verdad para cualquier cliente
 > (web, móvil, panel, script). Todo lo que no esté documentado aquí **no existe**
 > y no debe asumirse. Los ejemplos de este documento son respuestas **reales**
 > capturadas del servidor en ejecución.
@@ -28,6 +28,13 @@
 > devuelve `googleWallet: "sistema_apple"`). `sistema` se expone en
 > login/perfil/listados (§3.4, §3.5, §4.1, §5.2, §5.4, §7.5). **Sin endpoint
 > nuevo: sigue habiendo 20**.*
+> *v1.8: el comercio se loguea con **`nombreUsuario` + `password`** (el
+> `idRandomLargo` ya NO sirve para entrar; sigue para la URL de registro, el
+> QR y la clase). Nueva **2ª contraseña de operario** y nuevo **rol
+> `operario`** (camarero): misma URL de login, la contraseña decide el rol
+> (primero se prueba la de operario, luego la del comercio). El operario sólo
+> ve la tarjeta escaneada y mueve sus contadores (§2, §3.3, §5, §7.3, §7.4).
+> **Sin endpoint nuevo: sigue habiendo 20**.*
 
 ---
 
@@ -99,7 +106,7 @@ Toda respuesta es JSON con una de estas dos formas:
 ## 2. Autenticación y roles
 
 - Los tokens son **JWT firmado**, duración por defecto **8 h** (`JWT_EXPIRES_IN`).
-- Payload: `{ "sub": <id>, "role": "admin"|"comercio"|"tarjeta", "nombre": "..." }`.
+- Payload: `{ "sub": <id>, "role": "admin"|"comercio"|"operario"|"tarjeta", "nombre": "..." }`.
 - **No hay refresh token ni endpoint de logout**: el cliente conserva o descarta
   el token. Ante `401 INVALID_TOKEN` → volver a pedir login.
 - El `role` del payload sólo sirve para decidir la navegación del cliente; la
@@ -107,34 +114,44 @@ Toda respuesta es JSON con una de estas dos formas:
 
 ### Matriz de permisos
 
-| Ruta | `admin` | `comercio` | `tarjeta` |
-|---|---|---|---|
-| `/api/auth/*`, `/api/registro/tarjeta/:idRandomLargo` | pública (sin token) | | |
-| `/api/tarjeta/*` | ✅ *(`?tarjetaId=` obligatorio)* | ❌ `403` | ✅ (sus propios datos) |
-| `/api/comercio/*` | ✅ *(`comercioId` obligatorio)* | ✅ (el suyo) | ❌ `403` |
-| `/api/admin/*` | ✅ | ❌ `403` | ❌ `403` |
+| Ruta | `admin` | `comercio` | `operario` | `tarjeta` |
+|---|---|---|---|---|
+| `/api/auth/*`, `/api/registro/tarjeta/:idRandomLargo` | pública (sin token) | | | |
+| `/api/tarjeta/*` | ✅ *(`?tarjetaId=` obligatorio)* | ❌ `403` | ❌ `403` | ✅ (sus propios datos) |
+| `/api/comercio/tarjetas/:id` y `.../movimiento` | ✅ *(`comercioId` obligatorio)* | ✅ (el suyo) | ✅ (el suyo) | ❌ `403` |
+| resto de `/api/comercio/*` (perfil, listado, `password`) | ✅ *(`comercioId` obligatorio)* | ✅ (el suyo) | ❌ `403` | ❌ `403` |
+| `/api/admin/*` | ✅ | ❌ `403` | ❌ `403` | ❌ `403` |
+
+**Rol `operario` (v1.8, camarero):** nace en el login del comercio cuando la
+contraseña introduce la de operario. Su mundo es **la tarjeta escaneada**:
+`GET /api/comercio/tarjetas/:id` (leer esa tarjeta) y
+`POST /api/comercio/tarjetas/:id/movimiento` (modificar sus contadores, con
+las mismas reglas que el comercio: tipos, trazabilidad, idempotencia). **No**
+ve el listado de tarjetas, **no** ve el perfil del comercio, **no** cambia
+contraseñas, **no** toca nada del panel de comercio ni de admin.
 
 **Consideraciones para el cliente:**
 
 - Un token de `comercio` **nunca** puede leer datos de otro comercio; un token
   de `tarjeta` sólo los suyos. No hay que enviar «el comercio del que soy»: ya
-  está en el token.
+  está en el token. El `operario` tampoco sale de su comercio.
 - Si el cliente actúa como **admin sobre una ruta de comercio** debe indicar
   explícitamente `comercioId` (query string en GET, body en POST/PATCH);
   si falta → `400 COMERCIO_REQUERIDO`.
 - Si el cliente actúa como **admin sobre una ruta de tarjeta** debe indicar
   `tarjetaId` en query; si falta → `400 TARJETA_REQUERIDA`.
-- El token de comercio se emite **sólo si `activo = 1`**; si el comercio se
-  desactiva con sesión iniciada, las siguientes llamadas devuelven
+- El token de comercio/operario se emite **sólo si `activo = 1`**; si el
+  comercio se desactiva con sesión iniciada, las siguientes llamadas devuelven
   `403 COMERCIO_INACTIVO` → mostrar pantalla «comercio desactivado» y pedir
   login de nuevo.
 - Igual para tarjeta: `403 TARJETA_INACTIVA`.
 
 ### `idRandomLargo`: qué es y qué NO es
 
-- Identifica a un comercio en una URL pública (p. ej. QR de alta de cliente).
-- **No es una credencial**: no da acceso a nada privado. Para entrar hace falta
-  la password del comercio.
+- Identifica a un comercio en una URL pública (p. ej. QR de alta de cliente),
+  en la URL de alta de clase y en el `objectId` de Google Wallet.
+- **No es una credencial** y desde v1.8 **ya ni siquiera sirve para el login**
+  (el login pide `nombreUsuario`). No da acceso a nada privado.
 - El cliente no debe tratarlo como token, sesión ni clave de API.
 
 ---
@@ -174,12 +191,19 @@ Toda respuesta es JSON con una de estas dos formas:
 
 | Body | Tipo | Req. |
 |---|---|---|
+| `nombreUsuario` | string (3–32, `[a-z0-9_]`; se compara en minúsculas) | ✅ |
 | `password` | string | ✅ |
-| `idRandomLargo` | string | ✅ |
 
-> **v1.6**: el login de comercio **sólo acepta `idRandomLargo` + `password`**.
-> Se eliminó el login por `nombre`: si llega `nombre` sin `idRandomLargo`
-> (o falta el id), la API responde `400 VALIDATION` (campo obligatorio).
+> **v1.8**: el login **sólo acepta `nombreUsuario` + `password`**. El
+> `idRandomLargo` ya **no** sirve para entrar (sigue en la URL de registro, el
+> QR y la clase), y el login por `nombre` tampoco existe: cualquiera de los dos
+> sin `nombreUsuario` → `400 VALIDATION`.
+>
+> **La contraseña decide el rol**, en este orden:
+> 1. se comprueba primero contra la **contraseña de operario** → `role: "operario"`;
+> 2. si no cuadra, contra la **contraseña de comercio** → `role: "comercio"`.
+>
+> (Si ambas contraseñas fueran la misma, entraría como `operario`.)
 
 ```json
 {
@@ -187,15 +211,23 @@ Toda respuesta es JSON con una de estas dos formas:
   "token": "eyJhbGciOiJIUzI1NiIs...",
   "role": "comercio",
   "usuario": {
-    "id": 2, "nombre": "Café Central", "puntosPremio": 10,
+    "id": 2, "nombre": "Café Central", "nombreUsuario": "cafe_central",
+    "puntosPremio": 10,
     "premioDescripcion": "Café gratis",
     "idRandomLargo": "5949aef4b6e7e66be2a4c04e0a723c92d618d6e3bcac6b43"
   }
 }
 ```
-- `400 VALIDATION` — falta `idRandomLargo` (o se mandó sólo `nombre`).
-- `401 BAD_CREDENTIALS` (password incorrecta **o** comercio inexistente: mismo error).
-- `403 COMERCIO_INACTIVO` — credenciales correctas pero comercio desactivado.
+- `role` puede ser **`"comercio"`** o **`"operario"`** (ver matriz de permisos
+  §2): el front debe ramificar la navegación según el rol recibido.
+- `400 VALIDATION` — falta `nombreUsuario` (o su formato no es válido).
+- `401 BAD_CREDENTIALS` (password incorrecta **o** usuario inexistente: mismo
+  error, no filtra existencia).
+- `403 COMERCIO_INACTIVO` — credenciales correctas pero comercio desactivado
+  (también vale con la contraseña de operario).
+- ⚠ **Comercios heredados sin `nombreUsuario`** (columna `NULL` desde la
+  migración v1.8): **no pueden iniciar sesión** hasta que el admin les asigne
+  usuario y contraseña de operario con `PATCH /api/admin/comercios/:id`.
 
 ---
 
@@ -393,14 +425,20 @@ Historial propio (más recientes primero).
 
 ## 5. Endpoints de comercio
 
-*Rutas: token `comercio` (o `admin` + `comercioId`). **Se exige `activo = 1` en todas**.*
+*Rutas: token `comercio` u `operario` (o `admin` + `comercioId`), salvo donde
+se indique otro rol. **Se exige `activo = 1` en todas**. Alcance del
+`operario` (v1.8): **sólo §5.3 y §5.4**; el resto → `403 FORBIDDEN_ROLE`.*
 
 ### 5.1 `GET /api/comercio/perfil`
+
+*(rol `comercio` o `admin`)*
 
 ```json
 {
   "ok": true,
-  "comercio": { "id": 2, "nombre": "Café Central", "puntosPremio": 10,
+  "comercio": { "id": 2, "nombre": "Café Central",
+    "nombreUsuario": "cafe_central",
+    "puntosPremio": 10,
     "premioDescripcion": "Café gratis", "activo": 1,
     "idRandomLargo": "5949aef4b6e7e66be2a4c04e0a723c92d618d6e3bcac6b43",
     "createdAt": "2026-09-23T06:53:26.000Z",
@@ -408,12 +446,15 @@ Historial propio (más recientes primero).
     "googleWalletClaseEstado": "UNDER_REVIEW" }
 }
 ```
-> **No incluye `passwordHash`.** El `idRandomLargo` se muestra aquí para que el
+> **No incluye `passwordHash` ni `operarioHash`** (ninguna contraseña sale
+> nunca en una respuesta). El `idRandomLargo` se muestra aquí para que el
 > comercio pueda generar su QR de alta.
 > `googleWalletClaseId` / `googleWalletClaseEstado` son `null` **mientras no se
 > haya creado la clase de Google Wallet** para ese comercio (§7.9).
 
 ### 5.2 `GET /api/comercio/tarjetas`
+
+*(rol `comercio` o `admin` — el operario NO llega: `403`)*
 
 Todas las tarjetas del comercio (sin paginación, sin filtros).
 
@@ -425,11 +466,17 @@ Todas las tarjetas del comercio (sin paginación, sin filtros).
 
 ### 5.3 `GET /api/comercio/tarjetas/:id`
 
+*(rol `comercio`, `operario` o `admin`)*
+
 Misma forma que 5.2 pero `"tarjeta": {...}`.
 Si la tarjeta no existe **o pertenece a otro comercio** → `404 TARJETA_NOT_FOUND`
 (mismo código en ambos casos: no conviene distinguirlos en la interfaz).
+Es el punto de lectura de la **tarjeta escaneada** para el operario.
 
 ### 5.4 `POST /api/comercio/tarjetas/:id/movimiento` ⭐
+
+*(rol `comercio`, `operario` o `admin` — el operario sólo puede llegar aquí
+para las tarjetas de SU comercio; mismas reglas de movimiento para ambos)*
 
 Endpoint central: mueve puntos/premios **y** registra la operación, de forma
 atómica e idempotente.
@@ -547,14 +594,16 @@ El comercio autenticado cambia **su propia** contraseña.
 { "ok": true }
 ```
 
-- Sólo rol **`comercio`**: el `admin` recibe `403 FORBIDDEN_ROLE` (para
-  restablecer la contraseña de un comercio desde fuera, el admin usa
-  `PATCH /api/admin/comercios/:id` con `{ password }`).
+- Sólo rol **`comercio`**: ni el `admin` ni el `operario` llegan (`403
+  FORBIDDEN_ROLE`). Para restablecer credenciales desde fuera, el admin usa
+  `PATCH /api/admin/comercios/:id` con `{ password }` (contraseña de comercio)
+  **o** `{ operarioPassword }` (contraseña de operario).
 - **Errores**: `400 VALIDATION` (faltan campos o `passwordNueva` < 8),
   `401 PASSWORD_ACTUAL_INCORRECTA`, `401` sin token,
   `403 COMERCIO_INACTIVO`.
 - Al cambiarla deja de valer la anterior en todos los logins de ese
   comercio (los tokens ya emitidos siguen siendo válidos hasta expirar).
+  Cambia **sólo** la del comercio: la de operario es otra contraseña aparte.
 
 ---
 
@@ -625,36 +674,52 @@ hubiera cambiado levemente (si cambian los deltas → `409`).
 
 ```json
 { "ok": true, "total": 1, "comercios": [
-  { "id": 2, "nombre": "Café Central", "puntosPremio": 10,
+  { "id": 2, "nombre": "Café Central", "nombreUsuario": "cafe_central",
+    "puntosPremio": 10,
     "premioDescripcion": "Café gratis", "activo": 1,
     "idRandomLargo": "5949...", "createdAt": "...", "updatedAt": null,
     "googleWalletClaseId": "3388000000023208299.5949...",
     "googleWalletClaseEstado": "UNDER_REVIEW" } ] }
 ```
+> `nombreUsuario` es `null` en los comercios heredados que aún no lo tienen
+> relleno (no pueden loguear). **Nunca** aparecen `passwordHash` ni
+> `operarioHash`.
 
 ### 7.2 `GET /api/admin/comercios/:id` → `{ ok, comercio }` · `404 COMERCIO_NOT_FOUND`
 
-*(incluye también `googleWalletClaseId`, `googleWalletClaseEstado` y
-`googleWalletClaseCreadaEn`)*
+*(incluye también `nombreUsuario`, `googleWalletClaseId`,
+`googleWalletClaseEstado` y `googleWalletClaseCreadaEn`)*
 
 ### 7.3 `POST /api/admin/comercios`
 
 | Body | Tipo | Req. |
 |---|---|---|
 | `nombre` | string | ✅ |
-| `password` | string, **mínimo 8** | ✅ |
+| `nombreUsuario` | string 3–32, `[a-z0-9_]` (se guarda en minúsculas) | ✅ — v1.8 |
+| `password` | string, **mínimo 8** | ✅ (contraseña del comercio) |
+| `operarioPassword` | string, **mínimo 8** | ✅ — v1.8 (contraseña de operario/camarero) |
 | `puntosPremio` | entero > 0 | ✗ (defecto 10) |
 | `premioDescripcion` | string | ✗ |
 | `activo` | booleano | ✗ (defecto `true`) |
 
 `201 { ok, comercio }` con el `idRandomLargo` **recién generado** (mostrarlo/guardarlo
-para el QR del comercio). Si ya existe ese nombre → `400 COMERCIO_DUPLICADO`.
+para el QR del comercio). La respuesta incluye `nombreUsuario` y **ningún
+hash**. Errores: `400 COMERCIO_DUPLICADO` (nombre repetido),
+`400 USUARIO_DUPLICADO` (`nombreUsuario` ya usado por otro comercio),
+`400 VALIDATION` (faltan campos, formato de usuario inválido o contraseñas
+< 8).
 
 ### 7.4 `PATCH /api/admin/comercios/:id`
 
-Actualización parcial: cualquiera de los campos de 7.3 (`password` cambia la
-contraseña). Sin campos → `400 VALIDATION`. Devuelve `{ ok, comercio }` con
-`updatedAt` refrescado.
+Actualización parcial: cualquiera de los campos de 7.3 — `password` cambia la
+contraseña del comercio, **`operarioPassword`** la de operario y
+**`nombreUsuario`** el usuario de login (`400 USUARIO_DUPLICADO` si lo usa
+otro comercio). Sin campos → `400 VALIDATION`. Devuelve `{ ok, comercio }` con
+`updatedAt` refrescado y **sin hashes**.
+
+> Es el camino para **rellenar los comercios heredados** que quedaron con
+> `nombreUsuario: null` en la migración v1.8: hasta que no tengan usuario y
+> contraseña, esos comercios no pueden iniciar sesión (§3.3).
 
 ### 7.5 `GET /api/admin/tarjetas?comercioId=`
 
@@ -770,7 +835,7 @@ El id queda guardado en el comercio: se puede leer después con
 
 | Code | HTTP | Significado / acción sugerida |
 |---|---|---|
-| `VALIDATION` | 400 | Mostrar `message` tal cual (incluye `sistema` distinto de `google`\|`apple`) |
+| `VALIDATION` | 400 | Mostrar `message` tal cual (incluye `sistema` distinto de `google`\|`apple` y `nombreUsuario` con formato inválido) |
 | `SIN_EFECTO` | 400 | La operación no cambia nada |
 | `TIPO_INVALIDO` | 400 | Corregir el enum |
 | `NOMBRE_REQUERIDO` | 400 | Pedir nombre de camarero y reenviar |
@@ -780,6 +845,7 @@ El id queda guardado en el comercio: se puede leer después con
 | `PUNTOS_NEGATIVOS` | 400 | Descuento superior a lo disponible |
 | `COMERCIO_NOT_FOUND` | 400/404 | URL de registro inválida / recurso no existe |
 | `COMERCIO_DUPLICADO` | 400 | Nombre de comercio ya usado |
+| `USUARIO_DUPLICADO` | 400 | `nombreUsuario` ya usado por otro comercio (alta o PATCH) |
 | `COMERCIO_REQUERIDO` | 400 | Admin sin `comercioId` |
 | `TARJETA_REQUERIDA` | 400 | Admin sin `tarjetaId` |
 | `EMAIL_DUPLICADO` | 400 | Registro repetido en ese comercio **con otra contraseña** (misma contraseña ⇒ reanudación `201`, ver §3.5) |
@@ -819,8 +885,8 @@ El id queda guardado en el comercio: se puede leer después con
 | 7 | GET | `/api/tarjeta/operaciones` | tarjeta / admin |
 | 8 | GET | `/api/comercio/perfil` | comercio / admin |
 | 9 | GET | `/api/comercio/tarjetas` | comercio / admin |
-| 10 | GET | `/api/comercio/tarjetas/:id` | comercio / admin |
-| 11 | POST | `/api/comercio/tarjetas/:id/movimiento` | comercio / admin |
+| 10 | GET | `/api/comercio/tarjetas/:id` | comercio / **operario** / admin |
+| 11 | POST | `/api/comercio/tarjetas/:id/movimiento` | comercio / **operario** / admin |
 | 12 | PATCH | `/api/comercio/password` | comercio |
 | 13 | GET | `/api/admin/comercios` | admin |
 | 14 | GET | `/api/admin/comercios/:id` | admin |
@@ -830,6 +896,9 @@ El id queda guardado en el comercio: se puede leer después con
 | 18 | GET | `/api/admin/tarjetas/:id` | admin |
 | 19 | GET | `/api/admin/operaciones` | admin |
 | 20 | POST | `/api/admin/comercios/:idRandomLargo/google-wallet/clase` | admin |
+
+> **Rol `operario` (v1.8): sólo las filas 10 y 11** además de las públicas.
+> Cualquier otra fila → `403 FORBIDDEN_ROLE`.
 
 ---
 
@@ -855,6 +924,11 @@ El id queda guardado en el comercio: se puede leer después con
   `googleWallet: "sistema_apple"` en el movimiento). No hay endpoints,
   llamadas ni redirecciones a Apple. También está descartado el endpoint
   `PATCH .../sistema` (cambiar el sistema de una tarjeta ya dada de alta).
+- ❌ **Login de comercio con `idRandomLargo` o `nombre`** (v1.8): el único
+  camino es `nombreUsuario` + `password` (§3.3).
+- ❌ **Cambiar la contraseña de operario desde el panel del comercio**: esa
+  contraseña sólo la pone/cambia el admin (§7.3/§7.4). El operario tampoco
+  puede cambiar ninguna contraseña.
 
 ---
 
@@ -868,10 +942,15 @@ curl -s -X POST $BASE/api/auth/admin/login \
   -H "Content-Type: application/json" \
   -d '{"nombre":"admin","password":"..."}'
 
-# Crear comercio
+# Login comercio u operario (la password decide el rol)
+curl -s -X POST $BASE/api/auth/comercio/login \
+  -H "Content-Type: application/json" \
+  -d '{"nombreUsuario":"cafe_central","password":"..."}'
+
+# Crear comercio (password = comercio; operarioPassword = camarero)
 curl -s -X POST $BASE/api/admin/comercios \
   -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -d '{"nombre":"Café Central","password":"...","puntosPremio":10,"premioDescripcion":"Café gratis"}'
+  -d '{"nombre":"Café Central","nombreUsuario":"cafe_central","password":"...","operarioPassword":"...","puntosPremio":10,"premioDescripcion":"Café gratis"}'
 
 # Alta de cliente (idRandomLargo en la URL; sistema opcional: google|apple)
 curl -s -X POST $BASE/api/registro/tarjeta/$ID_RANDOM \
@@ -943,8 +1022,22 @@ curl -s -X POST $BASE/api/admin/comercios/$ID_RANDOM/google-wallet/clase \
 - [ ] `PATCH /api/comercio/password` cambia la contraseña del comercio:
       `401 PASSWORD_ACTUAL_INCORRECTA` si la actual no coincide,
       `400 VALIDATION` si la nueva es corta (< 8).
-- [ ] El login de comercio manda **`idRandomLargo` + `password`**: el login
-      por `nombre` ya no existe (`400 VALIDATION` si falta el id).
+- [ ] El login de comercio manda **`nombreUsuario` + `password`** (v1.8): el
+      `idRandomLargo` y el `nombre` ya **no** sirven para entrar
+      (`400 VALIDATION` si falta `nombreUsuario`).
+- [ ] La **misma** URL de login devuelve `role: "comercio"` o
+      `role: "operario"` según la contraseña (primero se prueba la de
+      operario): el front ramifica el menú con el `role` recibido.
+- [ ] El token de **operario** sólo puede: leer
+      `GET /api/comercio/tarjetas/:id` y mover
+      `POST /api/comercio/tarjetas/:id/movimiento`. Todo lo demás
+      (listado, perfil, `PATCH password`, rutas admin/tarjeta) → `403`.
+- [ ] `POST /api/admin/comercios` exige **`nombreUsuario`** (único:
+      `400 USUARIO_DUPLICADO`) y **`operarioPassword`** (min 8); la
+      respuesta **nunca** incluye `passwordHash` ni `operarioHash`.
+- [ ] `PATCH /api/admin/comercios/:id` acepta `nombreUsuario` y
+      `operarioPassword` (camino para rellenar los comercios heredados con
+      `null`: **mientras no tengan `nombreUsuario` no pueden loguear**).
 - [ ] El login de tarjeta incluye `googleWalletUrl`: si es `string`, se puede
       ofrecer «Guardar en Google Wallet» también desde ahí; si es `null`, no
       mostrar nada.

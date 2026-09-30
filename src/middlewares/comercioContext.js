@@ -1,7 +1,9 @@
 // =====================================================================
 //  Contexto del comercio en las rutas protegidas
 //
-//  - Si el token es de comercio => ese mismo comercio (id del token).
+//  - Si el token es de comercio u operario => ese mismo comercio (id del
+//    token); el operario SÓLO llega a las rutas que los routes permiten
+//    (tarjeta escaneada + movimiento).
 //  - Si el token es de admin (permitido en todas las rutas de comercio)
 //    => debe indicar explícitamente qué comercio (comercioId).
 //
@@ -14,7 +16,7 @@ async function resolverComercio(req, res, next) {
   try {
     let comercioId = null;
 
-    if (req.user.role === 'comercio') {
+    if (req.user.role === 'comercio' || req.user.role === 'operario') {
       comercioId = req.user.sub;
     } else if (req.user.role === 'admin') {
       comercioId = req.body?.comercioId ?? req.query?.comercioId ?? null;
