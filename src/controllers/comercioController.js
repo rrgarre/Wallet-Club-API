@@ -137,6 +137,9 @@ async function movimiento(req, res, next) {
  * - `passwordNueva` respeta MIN_PASSWORD_ADMIN (igual que al crear el
  *   comercio). No hay límite de intentos más allá del token: sin token
  *   válido no se llega aquí.
+ * - v1.9: `passwordNueva` NO puede ser igual a la contraseña de operario
+ *   (si lo fuera, el login —que prueba antes la de operario— sólo daría
+ *   rol 'operario' y el comercio perdería su panel) → 400 PASSWORDS_IGUALES.
  */
 async function cambiarPassword(req, res, next) {
   try {
@@ -146,6 +149,15 @@ async function cambiarPassword(req, res, next) {
     if (!(await verifyPassword(actual, req.comercio.passwordHash))) {
       throw unauthorized('La contraseña actual no es correcta', 'PASSWORD_ACTUAL_INCORRECTA');
     }
+    if (
+      req.comercio.operarioHash &&
+      (await verifyPassword(nueva, req.comercio.operarioHash))
+    ) {
+      throw badRequest(
+        'La contraseña de comercio y la de operario no pueden ser iguales',
+        'PASSWORDS_IGUALES'
+      );
+    }
 
     await dbComercios.update(req.comercio.id, { passwordHash: await hashPassword(nueva) });
     res.json({ ok: true });
@@ -154,4 +166,73 @@ async function cambiarPassword(req, res, next) {
   }
 }
 
-module.exports = { perfil, listarTarjetas, obtenerTarjeta, movimiento, cambiarPassword };
+/**
+ * PATCH /api/comercio/operario-password   (v1.9, roles: comercio | admin)
+ *
+ * Cambia la contraseña de OPERARIO/camarero del comercio.
+ *
+ * - Rol 'comercio': { passwordActual, operarioPasswordNueva,
+ *   operarioPasswordConfirmacion }
+ *   · `passwordActual` = contraseña DEL COMERCIO (el comercio no conoce ni
+ *     necesita la antigua de operario) → 401 PASSWORD_ACTUAL_INCORRECTA.
+ *   · la nueva y la confirmación deben coincidir → 400 VALIDATION.
+ * - Rol 'admin': { operarioPasswordNueva } + comercioId obligatorio
+ *   (lo resuelve el middleware; sin él → 400 COMERCIO_REQUERIDO).
+ * - En ambos: mínimo MIN_PASSWORD_ADMIN y NO igual a la contraseña del
+ *   comercio (conflicto de rol en el login) → 400 PASSWORDS_IGUALES.
+ * - La contraseña de operario anterior deja de valer en el login al
+ *   instante (los JWT de operario ya emitidos caducan solos).
+ */
+async function cambiarPasswordOperario(req, res, next) {
+  try {
+    const esAdmin = req.user.role === 'admin';
+    const nueva = texto(req.body.operarioPasswordNueva, 'operarioPasswordNueva', {
+      max: 200,
+    });
+    if (nueva.length < env.minPasswordAdmin) {
+      throw badRequest(
+        `La contraseña de operario debe tener al menos ${env.minPasswordAdmin} caracteres`,
+        'VALIDATION'
+      );
+    }
+
+    if (esAdmin) {
+      // El admin no justifica con passwordActual: ya es el superusuario.
+    } else {
+      const actual = texto(req.body.passwordActual, 'passwordActual', { max: 200 });
+      if (!(await verifyPassword(actual, req.comercio.passwordHash))) {
+        throw unauthorized('La contraseña de comercio no es correcta', 'PASSWORD_ACTUAL_INCORRECTA');
+      }
+      const confirmacion = texto(req.body.operarioPasswordConfirmacion, 'operarioPasswordConfirmacion', {
+        max: 200,
+      });
+      if (confirmacion !== nueva) {
+        throw badRequest(
+          'La confirmación no coincide con la nueva contraseña de operario',
+          'VALIDATION'
+        );
+      }
+    }
+
+    if (await verifyPassword(nueva, req.comercio.passwordHash)) {
+      throw badRequest(
+        'La contraseña de comercio y la de operario no pueden ser iguales',
+        'PASSWORDS_IGUALES'
+      );
+    }
+
+    await dbComercios.update(req.comercio.id, { operarioHash: await hashPassword(nueva) });
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = {
+  perfil,
+  listarTarjetas,
+  obtenerTarjeta,
+  movimiento,
+  cambiarPassword,
+  cambiarPasswordOperario,
+};

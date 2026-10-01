@@ -1,6 +1,6 @@
 # Wallet Club API — Contrato de API
 
-> **Versión 1.8 · documento de interfaz.** Fuente de verdad para cualquier cliente
+> **Versión 1.9 · documento de interfaz.** Fuente de verdad para cualquier cliente
 > (web, móvil, panel, script). Todo lo que no esté documentado aquí **no existe**
 > y no debe asumirse. Los ejemplos de este documento son respuestas **reales**
 > capturadas del servidor en ejecución.
@@ -35,6 +35,12 @@
 > (primero se prueba la de operario, luego la del comercio). El operario sólo
 > ve la tarjeta escaneada y mueve sus contadores (§2, §3.3, §5, §7.3, §7.4).
 > **Sin endpoint nuevo: sigue habiendo 20**.*
+> *v1.9: endpoint nuevo para **cambiar la contraseña de operario**
+> (`PATCH /api/comercio/operario-password`, roles `comercio` y `admin`,
+> §5.6) y regla general: **la contraseña de comercio y la de operario
+> nunca pueden ser iguales** (nuevo error `400 PASSWORDS_IGUALES`; aplica
+> también a `PATCH /api/comercio/password` y al alta/edición de comercios
+> de admin: §5.5, §7.3, §7.4, §8). **21 endpoints**.*
 
 ---
 
@@ -599,11 +605,51 @@ El comercio autenticado cambia **su propia** contraseña.
   `PATCH /api/admin/comercios/:id` con `{ password }` (contraseña de comercio)
   **o** `{ operarioPassword }` (contraseña de operario).
 - **Errores**: `400 VALIDATION` (faltan campos o `passwordNueva` < 8),
-  `401 PASSWORD_ACTUAL_INCORRECTA`, `401` sin token,
+  **`400 PASSWORDS_IGUALES`** (v1.9: `passwordNueva` == contraseña de
+  operario del comercio), `401 PASSWORD_ACTUAL_INCORRECTA`, `401` sin token,
   `403 COMERCIO_INACTIVO`.
 - Al cambiarla deja de valer la anterior en todos los logins de ese
   comercio (los tokens ya emitidos siguen siendo válidos hasta expirar).
   Cambia **sólo** la del comercio: la de operario es otra contraseña aparte.
+
+### 5.6 `PATCH /api/comercio/operario-password` ⭐ (nuevo en v1.9)
+
+Cambia la **contraseña de operario/camarero** del comercio. Roles
+permitidos: **`comercio`** y **`admin`** (§5 header; `operario` → `403
+FORBIDDEN_ROLE`: nadie cambia su propia contraseña de operario desde aquí).
+
+**Body — rol `comercio`**
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `passwordActual` | string | ✅ | contraseña **del comercio** (no la de operario) |
+| `operarioPasswordNueva` | string | ✅ | mínimo `MIN_PASSWORD_ADMIN` (8) |
+| `operarioPasswordConfirmacion` | string | ✅ | debe coincidir con la anterior |
+
+**Body — rol `admin`**: `{ operarioPasswordNueva }` + `comercioId`
+obligatorio (query o body, como el resto de rutas de comercio del admin).
+
+```json
+{ "passwordActual": "Comercio123",
+  "operarioPasswordNueva": "OperarioNuevo9",
+  "operarioPasswordConfirmacion": "OperarioNuevo9" }
+```
+
+**`200`**
+```json
+{ "ok": true }
+```
+
+- **El comercio nunca teclea la contraseña antigua de operario** (no la
+  conoce ni necesita): la garantía es su propia `passwordActual`.
+- **Errores**: `400 VALIDATION` (faltan campos, `operarioPasswordNueva` < 8
+  **o** la confirmación no coincide), **`400 PASSWORDS_IGUALES`** (la nueva
+  == contraseña de comercio del comercio), `401
+  PASSWORD_ACTUAL_INCORRECTA` (rol `comercio`), `400 COMERCIO_REQUERIDO`
+  (rol `admin` sin `comercioId`), `401` sin token, `403 COMERCIO_INACTIVO`,
+  `403 FORBIDDEN_ROLE` (rol `operario` o `tarjeta`).
+- La contraseña de operario anterior deja de valer en el login
+  **inmediatamente** (los JWT de operario ya emitidos caducan solos).
 
 ---
 
@@ -706,7 +752,8 @@ hubiera cambiado levemente (si cambian los deltas → `409`).
 para el QR del comercio). La respuesta incluye `nombreUsuario` y **ningún
 hash**. Errores: `400 COMERCIO_DUPLICADO` (nombre repetido),
 `400 USUARIO_DUPLICADO` (`nombreUsuario` ya usado por otro comercio),
-`400 VALIDATION` (faltan campos, formato de usuario inválido o contraseñas
+**`400 PASSWORDS_IGUALES`** (`password` == `operarioPassword`), `400
+VALIDATION` (faltan campos, formato de usuario inválido o contraseñas
 < 8).
 
 ### 7.4 `PATCH /api/admin/comercios/:id`
@@ -716,6 +763,11 @@ contraseña del comercio, **`operarioPassword`** la de operario y
 **`nombreUsuario`** el usuario de login (`400 USUARIO_DUPLICADO` si lo usa
 otro comercio). Sin campos → `400 VALIDATION`. Devuelve `{ ok, comercio }` con
 `updatedAt` refrescado y **sin hashes**.
+
+- **v1.9 — `400 PASSWORDS_IGUALES`**: la nueva contraseña de comercio no
+  puede coincidir con la de operario guardada (ni viceversa; y si llegan las
+  dos en el mismo PATCH, tampoco entre sí). Alternativa al alta/edición:
+  `PATCH /api/comercio/operario-password` (§5.6).
 
 > Es el camino para **rellenar los comercios heredados** que quedaron con
 > `nombreUsuario: null` en la migración v1.8: hasta que no tengan usuario y
@@ -846,6 +898,7 @@ El id queda guardado en el comercio: se puede leer después con
 | `COMERCIO_NOT_FOUND` | 400/404 | URL de registro inválida / recurso no existe |
 | `COMERCIO_DUPLICADO` | 400 | Nombre de comercio ya usado |
 | `USUARIO_DUPLICADO` | 400 | `nombreUsuario` ya usado por otro comercio (alta o PATCH) |
+| `PASSWORDS_IGUALES` | 400 | La contraseña de comercio y la de operario no pueden ser iguales (v1.9) |
 | `COMERCIO_REQUERIDO` | 400 | Admin sin `comercioId` |
 | `TARJETA_REQUERIDA` | 400 | Admin sin `tarjetaId` |
 | `EMAIL_DUPLICADO` | 400 | Registro repetido en ese comercio **con otra contraseña** (misma contraseña ⇒ reanudación `201`, ver §3.5) |
@@ -888,14 +941,15 @@ El id queda guardado en el comercio: se puede leer después con
 | 10 | GET | `/api/comercio/tarjetas/:id` | comercio / **operario** / admin |
 | 11 | POST | `/api/comercio/tarjetas/:id/movimiento` | comercio / **operario** / admin |
 | 12 | PATCH | `/api/comercio/password` | comercio |
-| 13 | GET | `/api/admin/comercios` | admin |
-| 14 | GET | `/api/admin/comercios/:id` | admin |
-| 15 | POST | `/api/admin/comercios` | admin |
-| 16 | PATCH | `/api/admin/comercios/:id` | admin |
-| 17 | GET | `/api/admin/tarjetas` | admin |
-| 18 | GET | `/api/admin/tarjetas/:id` | admin |
-| 19 | GET | `/api/admin/operaciones` | admin |
-| 20 | POST | `/api/admin/comercios/:idRandomLargo/google-wallet/clase` | admin |
+| 13 | PATCH | `/api/comercio/operario-password` | comercio / admin |
+| 14 | GET | `/api/admin/comercios` | admin |
+| 15 | GET | `/api/admin/comercios/:id` | admin |
+| 16 | POST | `/api/admin/comercios` | admin |
+| 17 | PATCH | `/api/admin/comercios/:id` | admin |
+| 18 | GET | `/api/admin/tarjetas` | admin |
+| 19 | GET | `/api/admin/tarjetas/:id` | admin |
+| 20 | GET | `/api/admin/operaciones` | admin |
+| 21 | POST | `/api/admin/comercios/:idRandomLargo/google-wallet/clase` | admin |
 
 > **Rol `operario` (v1.8): sólo las filas 10 y 11** además de las públicas.
 > Cualquier otra fila → `403 FORBIDDEN_ROLE`.
@@ -926,9 +980,10 @@ El id queda guardado en el comercio: se puede leer después con
   `PATCH .../sistema` (cambiar el sistema de una tarjeta ya dada de alta).
 - ❌ **Login de comercio con `idRandomLargo` o `nombre`** (v1.8): el único
   camino es `nombreUsuario` + `password` (§3.3).
-- ❌ **Cambiar la contraseña de operario desde el panel del comercio**: esa
-  contraseña sólo la pone/cambia el admin (§7.3/§7.4). El operario tampoco
-  puede cambiar ninguna contraseña.
+- ❌ **Cambiar la contraseña de operario**: el operario NO puede cambiarla
+  (ni la suya ni ninguna). Sí la puede cambiar el comercio con
+  `PATCH /api/comercio/operario-password` (§5.6) o el admin con ese mismo
+  endpoint o con `PATCH /api/admin/comercios/:id` (§7.4).
 
 ---
 
@@ -947,10 +1002,20 @@ curl -s -X POST $BASE/api/auth/comercio/login \
   -H "Content-Type: application/json" \
   -d '{"nombreUsuario":"cafe_central","password":"..."}'
 
-# Crear comercio (password = comercio; operarioPassword = camarero)
+# Crear comercio (password = comercio; operarioPassword = camarero; NO pueden ser iguales)
 curl -s -X POST $BASE/api/admin/comercios \
   -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{"nombre":"Café Central","nombreUsuario":"cafe_central","password":"...","operarioPassword":"...","puntosPremio":10,"premioDescripcion":"Café gratis"}'
+
+# Cambiar la contraseña de operario (desde el comercio, con SU contraseña)
+curl -s -X PATCH $BASE/api/comercio/operario-password \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $COMERCIO_TOKEN" \
+  -d '{"passwordActual":"...","operarioPasswordNueva":"...","operarioPasswordConfirmacion":"..."}'
+
+# Lo mismo desde admin (sin passwordActual; comercioId obligatorio)
+curl -s -X PATCH "$BASE/api/comercio/operario-password?comercioId=2" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"operarioPasswordNueva":"..."}'
 
 # Alta de cliente (idRandomLargo en la URL; sistema opcional: google|apple)
 curl -s -X POST $BASE/api/registro/tarjeta/$ID_RANDOM \
@@ -1038,6 +1103,14 @@ curl -s -X POST $BASE/api/admin/comercios/$ID_RANDOM/google-wallet/clase \
 - [ ] `PATCH /api/admin/comercios/:id` acepta `nombreUsuario` y
       `operarioPassword` (camino para rellenar los comercios heredados con
       `null`: **mientras no tengan `nombreUsuario` no pueden loguear**).
+- [ ] **v1.9**: existe `PATCH /api/comercio/operario-password` (21
+      endpoints): el comercio la cambia con `{ passwordActual (SU
+      contraseña), operarioPasswordNueva, operarioPasswordConfirmacion }`
+      y el admin con `{ operarioPasswordNueva }` + `comercioId`; el
+      `operario` recibe `403`. La vieja deja de valer al instante.
+- [ ] **v1.9**: `400 PASSWORDS_IGUALES` — la contraseña de comercio y la
+      de operario nunca pueden coincidir (regla en §5.5, §5.6, §7.3 y
+      §7.4): si coincidieran, el login sólo daría rol `operario`.
 - [ ] El login de tarjeta incluye `googleWalletUrl`: si es `string`, se puede
       ofrecer «Guardar en Google Wallet» también desde ahí; si es `null`, no
       mostrar nada.

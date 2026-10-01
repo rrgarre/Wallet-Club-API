@@ -32,5 +32,13 @@ router.post('/comercio/tarjetas/:id/movimiento', ctrl.movimiento);
 // Sólo el propio comercio: el admin restablece contraseñas con
 // PATCH /api/admin/comercios/:id (por eso se estrecha el rol aquí).
 router.patch('/comercio/password', requireRole('comercio'), ctrl.cambiarPassword);
+// v1.9: cambiar la contraseña de OPERARIO. La pide/cambia el comercio
+// (con su propia contraseña como garantía) o el admin (con comercioId);
+// el propio operario NO (403: no se autorrestringe su acceso).
+router.patch(
+  '/comercio/operario-password',
+  requireRole('comercio', 'admin'),
+  ctrl.cambiarPasswordOperario
+);
 
 module.exports = router;

@@ -511,6 +511,77 @@ async function main() {
   r = await cambiarPass(tAdmin, { comercioId: 1, passwordActual: 'x', passwordNueva: 'NuevaClave123' });
   check('admin no puede usar este endpoint -> 403', r.status === 403, `(${r.status})`);
 
+  r = await cambiarPass(tComercio, { passwordActual: 'Comercio123', passwordNueva: 'Operario123' });
+  check(
+    'cambio password: nueva IGUAL a la de operario -> 400 PASSWORDS_IGUALES',
+    r.status === 400 && r.json.error.code === 'PASSWORDS_IGUALES',
+    `(${r.status}, code=${r.json?.error?.code})`
+  );
+
+  // ---------------- CAMBIO DE PASSWORD DE OPERARIO (v1.9) ----------------
+  const cambiarPassOperario = (token, body, qs = '') =>
+    req('PATCH', `/api/comercio/operario-password${qs}`, { token, body });
+  const bodyOperario = (passwordActual, nueva, confirmacion) => ({
+    passwordActual,
+    operarioPasswordNueva: nueva,
+    operarioPasswordConfirmacion: confirmacion,
+  });
+
+  r = await cambiarPassOperario(null, bodyOperario('x', 'OperarioNuevo9', 'OperarioNuevo9'));
+  check('operario-password sin token -> 401', r.status === 401, `(${r.status})`);
+
+  r = await cambiarPassOperario(tComercio, bodyOperario('Comercio123', 'OperarioNuevo9', 'Distinta99'));
+  check(
+    'operario-password: confirmación NO coincide -> 400 VALIDATION',
+    r.status === 400 && r.json.error.code === 'VALIDATION',
+    `(${r.status})`
+  );
+
+  r = await cambiarPassOperario(tComercio, bodyOperario('mala', 'OperarioNuevo9', 'OperarioNuevo9'));
+  check(
+    'operario-password: passwordActual (de comercio) mala -> 401 PASSWORD_ACTUAL_INCORRECTA',
+    r.status === 401 && r.json.error.code === 'PASSWORD_ACTUAL_INCORRECTA',
+    `(${r.status})`
+  );
+
+  r = await cambiarPassOperario(tComercio, bodyOperario('Comercio123', 'corta', 'corta'));
+  check(
+    'operario-password: nueva corta (< MIN_PASSWORD_ADMIN) -> 400',
+    r.status === 400 && r.json.error.code === 'VALIDATION',
+    `(${r.status})`
+  );
+
+  r = await cambiarPassOperario(tComercio, bodyOperario('Comercio123', 'Comercio123', 'Comercio123'));
+  check(
+    'operario-password: nueva IGUAL a la de comercio -> 400 PASSWORDS_IGUALES',
+    r.status === 400 && r.json.error.code === 'PASSWORDS_IGUALES',
+    `(${r.status}, code=${r.json?.error?.code})`
+  );
+
+  r = await cambiarPassOperario(tOperario, bodyOperario('x', 'OperarioNuevo9', 'OperarioNuevo9'));
+  check(
+    'el propio operario NO puede cambiar su contraseña -> 403',
+    r.status === 403 && r.json.error.code === 'FORBIDDEN_ROLE',
+    `(${r.status})`
+  );
+
+  r = await cambiarPassOperario(tComercio, bodyOperario('Comercio123', 'OperarioNuevo9', 'OperarioNuevo9'));
+  check('operario-password: el comercio la cambia -> 200', r.status === 200 && r.json.ok === true, `(${r.status})`);
+
+  r = await req('POST', '/api/auth/comercio/login', {
+    body: { nombreUsuario: 'cafe_central', password: 'Operario123' },
+  });
+  check('la contraseña de operario ANTIGUA ya no vale -> 401', r.status === 401, `(${r.status})`);
+
+  r = await req('POST', '/api/auth/comercio/login', {
+    body: { nombreUsuario: 'cafe_central', password: 'OperarioNuevo9' },
+  });
+  check(
+    'la contraseña de operario NUEVA entra -> 200 role operario',
+    r.status === 200 && r.json.role === 'operario',
+    `(${r.status}, role=${r.json?.role})`
+  );
+
   r = await req('POST', '/api/auth/tarjeta/login', { body: { email: 'luis@x.com', password: 'Tarjeta123' } });
   check(
     'login tarjeta ok (con googleWalletUrl null: aún sin clase)',
@@ -739,6 +810,38 @@ async function main() {
   r = await req('GET', '/api/tarjeta/perfil', { token: tOperario });
   check('operario en rutas de tarjeta -> 403', r.status === 403, `(${r.status})`);
 
+  // ---------------- operario-password: admin y tarjeta (v1.9) ----------------
+  r = await req('PATCH', '/api/comercio/operario-password', {
+    token: tTarjeta,
+    body: { operarioPasswordNueva: 'TarjetaPasa1' },
+  });
+  check('rol tarjeta en operario-password -> 403', r.status === 403, `(${r.status})`);
+
+  r = await req('PATCH', '/api/comercio/operario-password', {
+    token: tAdmin,
+    body: { operarioPasswordNueva: 'AdminCambia1' },
+  });
+  check(
+    'admin sin comercioId en operario-password -> 400 COMERCIO_REQUERIDO',
+    r.status === 400 && r.json.error.code === 'COMERCIO_REQUERIDO',
+    `(${r.status})`
+  );
+
+  r = await req('PATCH', '/api/comercio/operario-password?comercioId=1', {
+    token: tAdmin,
+    body: { operarioPasswordNueva: 'AdminCambia1' },
+  });
+  check('admin cambia la contraseña de operario -> 200', r.status === 200 && r.json.ok === true, `(${r.status})`);
+
+  r = await req('POST', '/api/auth/comercio/login', {
+    body: { nombreUsuario: 'cafe_central', password: 'AdminCambia1' },
+  });
+  check(
+    'login con la contraseña que puso el ADMIN -> 200 role operario',
+    r.status === 200 && r.json.role === 'operario',
+    `(${r.status}, role=${r.json?.role})`
+  );
+
   // ---------------- ADMIN ----------------
   r = await req('GET', '/api/comercio/tarjetas');
   check('admin no infiere comercio sin indicarlo -> 401/403', r.status === 401 || r.status === 403, `(${r.status})`);
@@ -834,6 +937,16 @@ async function main() {
     `(${r.status})`
   );
 
+  r = await req('POST', '/api/admin/comercios', {
+    token: tAdmin,
+    body: { nombre: 'Passwords Iguales', nombreUsuario: 'passwords_iguales', password: 'Igualita123', operarioPassword: 'Igualita123' },
+  });
+  check(
+    'alta con password de comercio IGUAL a la de operario -> 400 PASSWORDS_IGUALES',
+    r.status === 400 && r.json.error.code === 'PASSWORDS_IGUALES',
+    `(${r.status}, code=${r.json?.error?.code})`
+  );
+
   r = await req('PATCH', '/api/admin/comercios/1', { token: tAdmin, body: { puntosPremio: 12, activo: false } });
   check('admin edita comercio', r.status === 200 && r.json.comercio.puntosPremio === 12 && r.json.comercio.activo === 0, `(${r.status})`);
 
@@ -877,6 +990,18 @@ async function main() {
     'PATCH con nombreUsuario de OTRO comercio -> 400 USUARIO_DUPLICADO',
     r.status === 400 && r.json.error.code === 'USUARIO_DUPLICADO',
     `(${r.status})`
+  );
+
+  // El bar_cerrado (comercio 2) tiene passwordHash 'Comercio123': la nueva
+  // contraseña de operario no puede ser la misma (v1.9).
+  r = await req('PATCH', '/api/admin/comercios/2', {
+    token: tAdmin,
+    body: { operarioPassword: 'Comercio123' },
+  });
+  check(
+    'PATCH operarioPassword IGUAL a la contraseña del comercio -> 400 PASSWORDS_IGUALES',
+    r.status === 400 && r.json.error.code === 'PASSWORDS_IGUALES',
+    `(${r.status}, code=${r.json?.error?.code})`
   );
 
   r = await req('GET', '/api/admin/tarjetas', { token: tAdmin });

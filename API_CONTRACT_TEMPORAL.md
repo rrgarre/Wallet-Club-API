@@ -1,59 +1,63 @@
-# ⚠️ Cambios temporales pendientes de integrar (v1.8)
+# ⚠️ Cambios temporales pendientes de integrar (v1.9)
 
 > Se vacía en cada actualización: sólo queda el último cambio. Si esta
 > página está vacía, la API está al día con `API_CONTRACT.md`.
 
-## Login de comercio por `nombreUsuario` + nuevo rol `operario`
+## Cambiar la contraseña de operario + regla «comercio ≠ operario»
 
-**Alcance amplio:** afecta a **login, matriz de permisos, panel de comercio y
-alta/edición de comercios** (§2, §3.3, §5, §7.1–§7.4). **Sin endpoint nuevo:
-siguen habiendo 20.** Detalle completo en `API_CONTRACT.md` v1.8; esto es
-SÓLO lo que hay que cambiar ahora.
+**Alcance:** endpoints de cambio de contraseña y alta/edición de comercios
+(§5.5, §5.6, §7.3, §7.4, §8). **1 endpoint nuevo → 21 en total.**
+Detalle completo en `API_CONTRACT.md` v1.9; esto es SÓLO lo que hay que
+cambiar ahora.
 
-### 1. Login `POST /api/auth/comercio/login` (ROMPE lo anterior)
+### 1. Endpoint nuevo: `PATCH /api/comercio/operario-password`
 
-- Body ahora: **`{ nombreUsuario, password }`**. Se eliminan `idRandomLargo`
-  y `nombre`: si llegan sin `nombreUsuario` → `400 VALIDATION`.
-  (El `idRandomLargo` sigue vivo para la URL de registro, el QR y la clase.)
-- **La contraseña decide el rol**, comprobándose **primero la de operario**:
-  - contraseña de operario → **`role: "operario"`**
-  - si no cuadra, la de comercio → **`role: "comercio"`**
-- El front debe **ramificar la navegación con `role`** (antes era siempre
-  `comercio`).
-- `nombreUsuario`: 3–32, `[a-z0-9_]`, case-insensitive. `401` si no existe
-  (no filtra), `403 COMERCIO_INACTIVO` si el comercio está desactivado.
+Roles: **`comercio`** y **`admin`** (el `operario` → `403 FORBIDDEN_ROLE`).
 
-### 2. Rol nuevo: `operario` (camarero)
+- **Rol comercio** — body:
 
-Sólo puede **2 cosas** (su comercio, con las mismas reglas de movimiento que
-el comercio):
+```json
+{
+  "passwordActual": "…contraseña DEL comercio…",
+  "operarioPasswordNueva": "…mínimo 8…",
+  "operarioPasswordConfirmacion": "…igual que la anterior…"
+}
+```
 
-- `GET /api/comercio/tarjetas/:id` → leer la **tarjeta escaneada**
-- `POST /api/comercio/tarjetas/:id/movimiento` → modificar sus contadores
+  · `passwordActual` se verifica contra la contraseña **del comercio** (el
+  comercio **nunca** teclea la antigua de operario: no la conoce) →
+  `401 PASSWORD_ACTUAL_INCORRECTA`.
+  · confirmación distinta → `400 VALIDATION`.
 
-Todo lo demás → **`403 FORBIDDEN_ROLE`**: listado de tarjetas, perfil del
-comercio, `PATCH /api/comercio/password`, rutas de admin y de tarjeta.
+- **Rol admin** — body: `{ "operarioPasswordNueva": "…" }` + `comercioId`
+  obligatorio (query o body → si falta, `400 COMERCIO_REQUERIDO`).
 
-### 3. Alta de comercio `POST /api/admin/comercios` (ROMPE lo anterior)
+- **`200 { ok: true }`**. La contraseña de operio**r** antigua deja de valer
+  en el login **al instante** (los JWT de operario emitidos caducan solos).
+  El cliente debe ofrecer este cambio en el panel del comercio (nuevo
+  formulario: contraseña del comercio + nueva de operario ×2).
 
-Body nuevo, **ambos obligatorios**:
+### 2. Regla nueva: la contraseña de comercio y la de operario NO pueden ser iguales
 
-- **`nombreUsuario`** (único global → `400 USUARIO_DUPLICADO` si repite;
-  formato inválido → `400 VALIDATION`)
-- **`operarioPassword`** (mínimo 8 → `400 VALIDATION` si corta)
+Nuevo código de error **`400 PASSWORDS_IGUALES`** (mensaje: «La
+contraseña de comercio y la de operario no pueden ser iguales»).
 
-La respuesta expone `nombreUsuario` y **nunca** `passwordHash` ni
-`operarioHash`.
+**Motivo:** el login prueba **primero** la de operario; si ambas fueran la
+misma, el comercio sólo entraría como `operario` y perdería su panel.
 
-### 4. `PATCH /api/admin/comercios/:id`
+Aplica en **todos** los caminos:
 
-Acepta además **`nombreUsuario`** y **`operarioPassword`** (mismas reglas).
-Es el camino para **rellenar los comercios heredados**: los existentes
-quedaron con `nombreUsuario: null` y **NO pueden iniciar sesión** hasta que
-les asignes usuario + contraseña de operario desde admin.
+| Endpoint | Cuándo |
+|---|---|
+| `PATCH /api/comercio/password` (§5.5) | `passwordNueva` == contraseña de operario guardada |
+| `PATCH /api/comercio/operario-password` (§5.6) | `operarioPasswordNueva` == contraseña de comercio guardada |
+| `POST /api/admin/comercios` (§7.3) | `password` == `operarioPassword` en el alta |
+| `PATCH /api/admin/comercios/:id` (§7.4) | la nueva `password` == operario guardado, o la nueva `operarioPassword` == comercio guardado (o las dos enviadas, entre sí) |
 
-### 5. Campos nuevos visibles
+(Comercios heredados sin operario (`operarioHash` NULL): no hay conflicto
+posible, se salta la comprobación.)
 
-- `nombreUsuario` en: login (respuesta), `GET /api/comercio/perfil`,
-  `GET /api/admin/comercios` y `GET /api/admin/comercios/:id`.
-- `operarioHash` **no aparece nunca** en ninguna respuesta.
+### 3. Sin cambios en el resto
+
+Login, matriz de permisos, movimientos y tarjetas: **sin cambios** (el
+rol `operario` sigue sin poder tocar contraseñas).

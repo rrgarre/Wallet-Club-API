@@ -24,7 +24,7 @@ npm run admin -- miraadmin MiPassword123
 npm run dev     # o npm start
 
 # Comprobación funcional sin necesidad de BD (usa una BD en memoria simulada)
-npm run smoke   ->  131/131 comprobaciones OK
+npm run smoke   ->  147/147 comprobaciones OK
 ```
 
 Comprobar: `GET /health` → `{ ok: true, db: "conectada" }`
@@ -95,6 +95,7 @@ scripts/smoke.js        prueba funcional end-to-end (npm run smoke)
 | GET | `/comercio/tarjetas/:id` | Tarjeta sólo si pertenece al comercio logueado (también rol `operario`: la escaneada) |
 | POST | `/comercio/tarjetas/:id/movimiento` | Mover puntos/premios + crear operación (también rol `operario`) |
 | PATCH | `/comercio/password` | Cambiar la contraseña del comercio (rol `comercio` sólo) |
+| PATCH | `/comercio/operario-password` | Cambiar la contraseña de operario (roles `comercio` y `admin`; la de comercio nunca puede ser igual a la de operario) |
 
 ### Admin (token `admin`)
 | GET | `/admin/comercios` · `/admin/comercios/:id` |

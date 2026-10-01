@@ -4,7 +4,7 @@
 const dbComercios = require('../db/comercios');
 const dbTarjetas = require('../db/tarjetas');
 const dbOperaciones = require('../db/operaciones');
-const { hashPassword } = require('../utils/hash');
+const { hashPassword, verifyPassword } = require('../utils/hash');
 const { notFound, badRequest } = require('../utils/errors');
 const { texto, positivo, idParam, nombreUsuario: vNombreUsuario } = require('../utils/validate');
 const { env } = require('../config/env');
@@ -62,6 +62,12 @@ async function crearComercio(req, res, next) {
       throw badRequest(
         `La contraseña de operario debe tener al menos ${env.minPasswordAdmin} caracteres`,
         'VALIDATION'
+      );
+    }
+    if (password === operarioPassword) {
+      throw badRequest(
+        'La contraseña de comercio y la de operario no pueden ser iguales',
+        'PASSWORDS_IGUALES'
       );
     }
     const puntosPremio = positivo(req.body.puntosPremio ?? 10, 'puntosPremio');
@@ -139,6 +145,24 @@ async function editarComercio(req, res, next) {
     }
     if (campos.nombreUsuario !== undefined) {
       await exigirNombreUsuarioLibre(campos.nombreUsuario, id);
+    }
+
+    // v1.9: la contraseña de comercio y la de operario nunca pueden ser la
+    // misma (el login prueba antes la de operario: si coinciden, el comercio
+    // sólo entraría como 'operario' y perdería su panel).
+    const igualdad =
+      campos.passwordHash !== undefined && campos.operarioHash !== undefined
+        ? req.body.password === req.body.operarioPassword // ambos nuevos: comparar textos
+        : campos.passwordHash !== undefined
+          ? Boolean(existente.operarioHash) && (await verifyPassword(req.body.password, existente.operarioHash))
+          : campos.operarioHash !== undefined
+            ? Boolean(existente.passwordHash) && (await verifyPassword(req.body.operarioPassword, existente.passwordHash))
+            : false;
+    if (igualdad) {
+      throw badRequest(
+        'La contraseña de comercio y la de operario no pueden ser iguales',
+        'PASSWORDS_IGUALES'
+      );
     }
 
     const comercio = await dbComercios.update(id, campos);
