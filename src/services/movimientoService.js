@@ -21,6 +21,13 @@
 //      (comportamiento histórico: sin techo). Si los premios ya estaban
 //      por encima (p. ej. el admin bajó el techo), la siguiente operación
 //      que pase por aquí los iguala al máximo.
+//   7. (v1.11) TOPE DE PUNTOS: cuando los premios quedan en/por encima
+//      del techo (maximoPremios > 0), los puntos NO se convierten en
+//      premios y no superan `puntosPremio - 1`. El contador queda
+//      CONGELADO en el estado (puntos == umbral-1, premios ==
+//      maximoPremios): las subidas siguientes se absorben en silencio y
+//      sólo las operaciones que restan se aplican (descongelan).
+//      `maximoPremios = 0` => nunca congela.
 // =====================================================================
 const dbTarjetas = require('../db/tarjetas');
 const dbOperaciones = require('../db/operaciones');
@@ -218,22 +225,30 @@ async function aplicarMovimiento(p) {
         );
       }
 
-      // Canje automático de puntos -> premios
-      let conversion = null;
+      // --- Techo de premios y TOPE DE PUNTOS (reglas 6 y 7) -------------
+      // `tope` = maximoPremios del comercio (0 = sin límite).
+      const tope = Number(maximoPremios) || 0;
       const umbral = Number(puntosPremio);
-      if (puntosDelta > 0 && umbral > 0 && nuevosPuntos >= umbral) {
+
+      // Canje automático de puntos -> premios (regla 7, v1.11): NO se
+      // convierte si los premios quedan ya en/por encima del techo. En ese
+      // caso los puntos no llegan a umbral: se recortan a umbral-1. Estado
+      // resultante "tope de puntos" = (puntos == umbral-1,
+      // premios == maximoPremios), congelado para cualquier subida.
+      let conversion = null;
+      const enTecho = tope > 0 && nuevosPremios >= tope;
+      if (enTecho && umbral > 0 && nuevosPuntos >= umbral) {
+        nuevosPuntos = umbral - 1;
+      } else if (puntosDelta > 0 && umbral > 0 && nuevosPuntos >= umbral) {
         const n = Math.floor(nuevosPuntos / umbral);
         nuevosPuntos -= n * umbral;
         nuevosPremios += n;
         conversion = { n, umbral, puntosDescontados: n * umbral };
       }
 
-      // --- Techo de premios (v1.10, regla 6) ----------------------------
-      // Se comprueba DESPUÉS de sumar el delta y el canje automático:
-      // si el resultado final supera maximoPremios, se recorta al máximo
-      // de forma silenciosa (0 = sin límite). El libro de operaciones
-      // registra lo pedido; el saldo guardado es el recortado.
-      const tope = Number(maximoPremios) || 0;
+      // Recorte de premios al techo (v1.10, regla 6): silencioso.
+      // El libro de operaciones registra lo pedido; el saldo guardado es
+      // el recortado/congelado.
       if (tope > 0 && nuevosPremios > tope) {
         nuevosPremios = tope;
       }

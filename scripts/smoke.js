@@ -1545,6 +1545,81 @@ async function main() {
     `(${r.status})`
   );
 
+  // ---------------- ESTADO "TOPE DE PUNTOS" (v1.11) ----------------
+  // Tarjeta 1 al llegar aquí: premios = 10 y maximoPremios = 0 (sin límite).
+  r = await req('GET', '/api/comercio/tarjetas/1', { token: tComercio });
+  const topePremios = r.json.tarjeta.premios;
+  check(
+    '§5.3 expone puntosPremio para que el front calcule el tope',
+    r.status === 200 && r.json.puntosPremio === 10,
+    `(${r.status}, pp=${r.json?.puntosPremio})`
+  );
+
+  r = await req('PATCH', '/api/admin/comercios/1', { token: tAdmin, body: { maximoPremios: topePremios } });
+  check(
+    'admin fija el techo = premios actuales',
+    r.status === 200 && r.json.comercio.maximoPremios === topePremios,
+    `(${r.status})`
+  );
+
+  // Remontón: +100 puntos con el techo ya alcanzado -> NO hay conversión
+  // (el premio resultante lo confiscaría el techo): los puntos se recortan
+  // a umbral-1 = 9. Ni reset ni premio nuevo.
+  r = await mov(1, { puntosDelta: 100, premiosDelta: 0, idempotencia: 'tope11-001' }, tComercio);
+  check(
+    'remontón sobre el techo -> puntos recortados a 9 (umbral-1), sin conversión',
+    r.status === 201 && r.json.tarjeta.puntos === 9 && r.json.tarjeta.premios === topePremios,
+    `(${r.status}, puntos=${r.json?.tarjeta?.puntos}, premios=${r.json?.tarjeta?.premios})`
+  );
+  check(
+    'el 201 del movimiento expone puntosPremio',
+    r.status === 201 && r.json.puntosPremio === 10,
+    `(${r.status}, pp=${r.json?.puntosPremio})`
+  );
+
+  // Congelado: una subida de puntos se absorbe en silencio.
+  r = await mov(1, { puntosDelta: 5, premiosDelta: 0, idempotencia: 'tope11-002' }, tComercio);
+  check(
+    'tope: +5 puntos absorbidos en silencio (sigue en 9)',
+    r.status === 201 && r.json.tarjeta.puntos === 9 && r.json.tarjeta.premios === topePremios,
+    `(${r.status}, puntos=${r.json?.tarjeta?.puntos})`
+  );
+
+  // Congelado: una subida de premios también (techo).
+  r = await mov(1, { puntosDelta: 0, premiosDelta: 1, idempotencia: 'tope11-003', nombre: 'Tope', codigoCamarero: 'C1' }, tComercio);
+  check(
+    'tope: +1 premio absorbido por el techo',
+    r.status === 201 && r.json.tarjeta.premios === topePremios,
+    `(${r.status}, premios=${r.json?.tarjeta?.premios})`
+  );
+
+  // Una operación que RESTA sí se aplica y descongela.
+  r = await mov(1, { puntosDelta: 0, premiosDelta: -1, idempotencia: 'tope11-004' }, tComercio);
+  check(
+    'canje bajo el techo -> 201 y tarjeta descongelada (premios = tope - 1)',
+    r.status === 201 && r.json.tarjeta.premios === topePremios - 1 && r.json.tarjeta.puntos === 9,
+    `(${r.status}, premios=${r.json?.tarjeta?.premios})`
+  );
+
+  // Descongelada: los puntos vuelven a convertirse normalmente.
+  r = await mov(1, { puntosDelta: 1, premiosDelta: 0, idempotencia: 'tope11-005' }, tComercio);
+  check(
+    'descongelada: 9 + 1 puntos -> canje automático (puntos 0, premios al tope)',
+    r.status === 201 && r.json.tarjeta.puntos === 0 && r.json.tarjeta.premios === topePremios,
+    `(${r.status}, puntos=${r.json?.tarjeta?.puntos}, premios=${r.json?.tarjeta?.premios})`
+  );
+
+  // Techo 0 = sin límite: vuelve el comportamiento histórico (reset al umbral).
+  r = await req('PATCH', '/api/admin/comercios/1', { token: tAdmin, body: { maximoPremios: 0 } });
+  check('admin retira el techo -> 0', r.status === 200 && r.json.comercio.maximoPremios === 0, `(${r.status})`);
+
+  r = await mov(1, { puntosDelta: 20, premiosDelta: 0, idempotencia: 'tope11-006' }, tComercio);
+  check(
+    'techo 0 -> sin congelón: canje automático normal (puntos 0, premios tope + 2)',
+    r.status === 201 && r.json.tarjeta.puntos === 0 && r.json.tarjeta.premios === topePremios + 2,
+    `(${r.status}, puntos=${r.json?.tarjeta?.puntos}, premios=${r.json?.tarjeta?.premios})`
+  );
+
   // ---------------- resumen ----------------
   const fallos = resultados.filter((x) => !x.ok);
   console.log(`\n${resultados.length - fallos.length}/${resultados.length} comprobaciones OK`);

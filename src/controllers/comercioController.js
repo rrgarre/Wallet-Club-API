@@ -74,7 +74,14 @@ async function obtenerTarjeta(req, res, next) {
     // v1.10: el techo de premios es del COMERCIO (no de la tarjeta), por eso
     // va fuera del objeto `tarjeta`: el front (también el operario) puede
     // avisar «esto llegará al techo» antes de mover.
-    res.json({ ok: true, maximoPremios: Number(req.comercio.maximoPremios) || 0, tarjeta });
+    // v1.11: idem `puntosPremio`, sin el cual el front no puede comprobar
+    // el estado de tope (puntos == puntosPremio - 1 && premios == max).
+    res.json({
+      ok: true,
+      puntosPremio: Number(req.comercio.puntosPremio) || 0,
+      maximoPremios: Number(req.comercio.maximoPremios) || 0,
+      tarjeta,
+    });
   } catch (err) {
     next(err);
   }
@@ -129,8 +136,11 @@ async function movimiento(req, res, next) {
     // v1.10: el techo viaja también en la respuesta (tanto en el 201 como
     // en el 200 de duplicado) para que el front se actualice tras cada
     // movimiento y pueda avisar antes de enviar.
+    // v1.11: idem puntosPremio (el front lo necesita para comprobar el
+    // estado de tope: puntos == puntosPremio - 1 && premios == maximoPremios).
     res.status(resultado.duplicado ? 200 : 201).json({
       ...resultado,
+      puntosPremio: Number(req.comercio.puntosPremio) || 0,
       maximoPremios: Number(req.comercio.maximoPremios) || 0,
     });
   } catch (err) {

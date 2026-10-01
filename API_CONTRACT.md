@@ -1,6 +1,6 @@
 # Wallet Club API — Contrato de API
 
-> **Versión 1.10 · documento de interfaz.** Fuente de verdad para cualquier cliente
+> **Versión 1.11 · documento de interfaz.** Fuente de verdad para cualquier cliente
 > (web, móvil, panel, script). Todo lo que no esté documentado aquí **no existe**
 > y no debe asumirse. Los ejemplos de este documento son respuestas **reales**
 > capturadas del servidor en ejecución.
@@ -47,6 +47,13 @@
 > puntos), se **recortan silenciosamente** al máximo en esa misma
 > operación (§5.4, §6.7, §7.3, §7.4). Alta y edición desde admin;
 > visible en perfil y listados. **Sin endpoint nuevo: siguen 21**.*
+> *v1.11: estado **«tope de puntos»** de las tarjetas (§5.3, §5.4, §6.8):
+> con `maximoPremios > 0`, si los premios quedan en el techo los puntos
+> **no se convierten** y no superan `puntosPremio - 1` — ambos contadores
+> quedan **congelados** para subidas (las operaciones que restan se aplican
+> y descongelan). Además, `puntosPremio` se expone en §5.3 y en la
+> respuesta del movimiento para que el front se autocalculate el estado.
+> **Sin endpoint nuevo: siguen 21**.*
 
 ---
 
@@ -482,17 +489,19 @@ Todas las tarjetas del comercio (sin paginación, sin filtros).
 
 *(rol `comercio`, `operario` o `admin`)*
 
-Misma forma que 5.2 pero con **`maximoPremios`** (techo del comercio, v1.10)
-a nivel superior y `"tarjeta": {...}`:
+Misma forma que 5.2 pero con **`puntosPremio`** y **`maximoPremios`** (datos
+del comercio, v1.10/v1.11) a nivel superior y `"tarjeta": {...}`:
 
 ```json
-{ "ok": true, "maximoPremios": 3, "tarjeta": { "id": 1, "comercioId": 1, ... } }
+{ "ok": true, "puntosPremio": 10, "maximoPremios": 3,
+  "tarjeta": { "id": 1, "comercioId": 1, ... } }
 ```
 
 Si la tarjeta no existe **o pertenece a otro comercio** → `404 TARJETA_NOT_FOUND`
 (mismo código en ambos casos: no conviene distinguirlos en la interfaz).
 Es el punto de lectura de la **tarjeta escaneada** para el operario: con
-`maximoPremios` + `tarjeta.premios` el front (también el camarero) puede
+`tarjeta.premios`, `maximoPremios` y `puntosPremio` el front (también el
+camarero) sabe si la tarjeta está en **tope de puntos** (§6.8) y puede
 avisar antes de mover si la operación llegaría al techo.
 
 ### 5.4 `POST /api/comercio/tarjetas/:id/movimiento` ⭐
@@ -503,7 +512,9 @@ para las tarjetas de SU comercio; mismas reglas de movimiento para ambos)*
 > **Techo de premios (v1.10):** si el comercio define `maximoPremios > 0`
 > y este movimiento dejara los premios por encima, se **recortan
 > silenciosamente** al máximo — lee siempre `tarjeta.premios` de la
-> respuesta (regla completa en §6.7). La respuesta incluye también
+> respuesta (regla completa en §6.7). **Tope de puntos (v1.11):** con los
+> premios en el techo, los puntos quedan congelados en `puntosPremio - 1`
+> (§6.8). La respuesta incluye también **`puntosPremio`** y
 > **`maximoPremios`** a nivel superior (en el `201` y en el `200
 > duplicado`), junto a `googleWallet`, para que el front se actualice
 > tras cada movimiento.
@@ -729,6 +740,29 @@ obligatorio (query o body, como el resto de rutas de comercio del admin).
      saldo guardado es **lo recortado**. Al reconciliar sumas, ten en
      cuenta que un saldo por debajo de la suma de deltas puede deberse a
      un techo.
+8. **Estado «tope de puntos» — congelación (v1.11).** Cuando los premios
+   de la tarjeta quedan **en el techo** (`maximoPremios > 0` y
+   `premios == maximoPremios`):
+
+   - Los **puntos no se convierten** en premios y **no superan
+     `puntosPremio - 1`**: el contador de puntos queda congelado en
+     `puntosPremio - 1` (si el movimiento lo llevaría más allá —o ya
+     estaba por encima—, se recorta a `puntosPremio - 1`, sin canje
+     automático y sin reset). Un estado de tope es, por tanto,
+     `puntos == puntosPremio - 1 && premios == maximoPremios`.
+   - Las **subidas** posteriores de puntos o premios **se absorben en
+     silencio**: la API responde igual (`201`), registra la operación en
+     el libro y los saldos **no se mueven**. Es responsabilidad del front
+     no intentar incrementar sobre el máximo (puede avisar antes: con
+     `puntosPremio` + `maximoPremios` de la respuesta autocalcula el
+     estado).
+   - Las **operaciones que restan** (canje de premios, correcciones a la
+     baja) **sí se aplican**: al bajar `premios` por debajo del techo la
+     tarjeta **descongela** y los puntos vuelven a convertirse con
+     normalidad.
+   - **`maximoPremios = 0` (sin límite) nunca congela**: la tarjeta sigue
+     el comportamiento histórico (reset de puntos al alcanzar
+     `puntosPremio`).
 
 ### Idempotencia (obligatoria en la práctica)
 
@@ -1165,6 +1199,15 @@ curl -s -X POST $BASE/api/admin/comercios/$ID_RANDOM/google-wallet/clase \
       operario) y en la respuesta del movimiento (§5.4, `201` y `200
       duplicado`): comparando `tarjeta.premios + delta` contra el techo
       se sabe antes de enviar si habrá recorte.
+- [ ] **v1.11**: estado **«tope de puntos»** (§6.8) — con los premios en
+      el techo, los puntos **no se convierten** y quedan congelados en
+      `puntosPremio - 1`; las subidas se absorben en silencio (la
+      operación se registra y los saldos no se mueven) y las que restan
+      se aplican y descongelan. **`puntosPremio` es ahora visible** en
+      §5.3 y en la respuesta del movimiento (junto a `maximoPremios`),
+      con esos dos campos el front autocalcula
+      `puntos == puntosPremio - 1 && premios == maximoPremios` y decide
+      cuándo avisar / no enviar.
 - [ ] El login de tarjeta incluye `googleWalletUrl`: si es `string`, se puede
       ofrecer «Guardar en Google Wallet» también desde ahí; si es `null`, no
       mostrar nada.

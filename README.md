@@ -24,7 +24,7 @@ npm run admin -- miraadmin MiPassword123
 npm run dev     # o npm start
 
 # Comprobación funcional sin necesidad de BD (usa una BD en memoria simulada)
-npm run smoke   ->  162/162 comprobaciones OK
+npm run smoke   ->  172/172 comprobaciones OK
 ```
 
 Comprobar: `GET /health` → `{ ok: true, db: "conectada" }`
@@ -92,8 +92,8 @@ scripts/smoke.js        prueba funcional end-to-end (npm run smoke)
 ### Comercio (token `comercio` u `operario`; admin permitido; **exige `activo=true`**)
 | GET | `/comercio/perfil` | Datos del comercio (rol `comercio`/admin: `?comercioId=` o en body) |
 | GET | `/comercio/tarjetas` | Tarjetas del comercio (rol `comercio`/admin) |
-| GET | `/comercio/tarjetas/:id` | Tarjeta sólo si pertenece al comercio logueado (también rol `operario`: la escaneada) — incluye `maximoPremios` del comercio |
-| POST | `/comercio/tarjetas/:id/movimiento` | Mover puntos/premios + crear operación (también rol `operario`) — respuesta con `maximoPremios` y premios ya recortados al techo si procede |
+| GET | `/comercio/tarjetas/:id` | Tarjeta sólo si pertenece al comercio logueado (también rol `operario`: la escaneada) — incluye `puntosPremio` y `maximoPremios` del comercio (estado de tope) |
+| POST | `/comercio/tarjetas/:id/movimiento` | Mover puntos/premios + crear operación (también rol `operario`) — respuesta con `puntosPremio`/`maximoPremios`; premios recortados al techo y puntos congelados en `puntosPremio - 1` si la tarjeta está en tope |
 | PATCH | `/comercio/password` | Cambiar la contraseña del comercio (rol `comercio` sólo) |
 | PATCH | `/comercio/operario-password` | Cambiar la contraseña de operario (roles `comercio` y `admin`; la de comercio nunca puede ser igual a la de operario) |
 
