@@ -28,6 +28,10 @@ CREATE TABLE IF NOT EXISTS comercios (
   nombreUsuario     VARCHAR(32)  NULL,
   puntosPremio      INT          NOT NULL DEFAULT 10,
   premioDescripcion VARCHAR(255) NULL,
+  -- v1.10: techo de premios de sus tarjetas. 0 = SIN LÍMITE.
+  -- Si un movimiento dejara los premios por encima del techo, se recortan
+  -- silenciosamente al máximo en esa misma operación.
+  maximoPremios     INT          NOT NULL DEFAULT 0,
   activo            TINYINT(1)   NOT NULL DEFAULT 1,
   idRandomLargo     CHAR(48)     NOT NULL,
   -- 1ª contraseña: la del comercio (rol 'comercio').

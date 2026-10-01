@@ -57,10 +57,11 @@ function run(sqlRaw, params = []) {
       nombreUsuario: params[1] ?? null,
       puntosPremio: params[2],
       premioDescripcion: params[3],
-      activo: params[4],
-      idRandomLargo: params[5],
-      passwordHash: params[6],
-      operarioHash: params[7] ?? null,
+      maximoPremios: params[4] ?? 0,
+      activo: params[5],
+      idRandomLargo: params[6],
+      passwordHash: params[7],
+      operarioHash: params[8] ?? null,
       createdAt: new Date().toISOString(),
       updatedAt: null,
     };
@@ -299,6 +300,7 @@ async function seed() {
       idRandomLargo: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6',
       passwordHash: await hashPassword('Comercio123'),
       operarioHash: await hashPassword('Operario123'),
+      maximoPremios: 0,
       createdAt: new Date().toISOString(),
       updatedAt: null,
     },
@@ -312,6 +314,7 @@ async function seed() {
       idRandomLargo: 'f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1',
       passwordHash: await hashPassword('Comercio123'),
       operarioHash: await hashPassword('Operario123'),
+      maximoPremios: 0,
       createdAt: new Date().toISOString(),
       updatedAt: null,
     }
@@ -854,10 +857,12 @@ async function main() {
 
   r = await req('GET', '/api/admin/comercios', { token: tAdmin });
   check(
-    'admin lista comercios (con nombreUsuario, sin hashes)',
+    'admin lista comercios (con nombreUsuario, maximoPremios=0, sin hashes)',
     r.status === 200 &&
       r.json.total === 2 &&
-      r.json.comercios.every((c) => c.nombreUsuario && !('passwordHash' in c) && !('operarioHash' in c)),
+      r.json.comercios.every(
+        (c) => c.nombreUsuario && c.maximoPremios === 0 && !('passwordHash' in c) && !('operarioHash' in c)
+      ),
     `(${r.status}, total=${r.json?.total})`
   );
 
@@ -873,13 +878,15 @@ async function main() {
       operarioPassword: 'OperarioSol1',
       puntosPremio: 7,
       premioDescripcion: 'Pan gratis',
+      maximoPremios: 6,
     },
   });
   check(
-    'admin crea comercio -> idRandomLargo de 48, nombreUsuario visible y NINGÚN hash',
+    'admin crea comercio -> idRandomLargo de 48, nombreUsuario, maximoPremios y NINGÚN hash',
     r.status === 201 &&
       r.json.comercio.idRandomLargo.length === 48 &&
       r.json.comercio.nombreUsuario === 'panaderia_sol' &&
+      r.json.comercio.maximoPremios === 6 &&
       !('passwordHash' in r.json.comercio) &&
       !('operarioHash' in r.json.comercio),
     `(${r.status})`
@@ -945,6 +952,26 @@ async function main() {
     'alta con password de comercio IGUAL a la de operario -> 400 PASSWORDS_IGUALES',
     r.status === 400 && r.json.error.code === 'PASSWORDS_IGUALES',
     `(${r.status}, code=${r.json?.error?.code})`
+  );
+
+  r = await req('POST', '/api/admin/comercios', {
+    token: tAdmin,
+    body: { nombre: 'Techo Negativo', nombreUsuario: 'techo_negativo', password: 'Panaderia1', operarioPassword: 'OperarioSol1', maximoPremios: -1 },
+  });
+  check(
+    'alta con maximoPremios NEGATIVO -> 400 VALIDATION',
+    r.status === 400 && r.json.error.code === 'VALIDATION',
+    `(${r.status})`
+  );
+
+  r = await req('POST', '/api/admin/comercios', {
+    token: tAdmin,
+    body: { nombre: 'Techo Decimal', nombreUsuario: 'techo_decimal', password: 'Panaderia1', operarioPassword: 'OperarioSol1', maximoPremios: 2.5 },
+  });
+  check(
+    'alta con maximoPremios NO entero -> 400 VALIDATION',
+    r.status === 400 && r.json.error.code === 'VALIDATION',
+    `(${r.status})`
   );
 
   r = await req('PATCH', '/api/admin/comercios/1', { token: tAdmin, body: { puntosPremio: 12, activo: false } });
@@ -1442,6 +1469,80 @@ async function main() {
     'perfil de tarjeta expone sistema',
     r.status === 200 && r.json.tarjeta.sistema === 'apple',
     `(${r.status}, sistema=${r.json?.tarjeta?.sistema})`
+  );
+
+  // ---------------- TECHO DE PREMIOS (maximoPremios, v1.10) ----------------
+  // Al llegar aquí, la tarjeta 1 (comercio 1) tiene premios = 15.
+  r = await req('PATCH', '/api/admin/comercios/1', { token: tAdmin, body: { maximoPremios: 3 } });
+  check('admin pone maximoPremios = 3 -> 200', r.status === 200 && r.json.comercio.maximoPremios === 3, `(${r.status})`);
+
+  r = await req('GET', '/api/comercio/perfil', { token: tComercio });
+  check('perfil del comercio expone maximoPremios', r.status === 200 && r.json.comercio.maximoPremios === 3, `(${r.status})`);
+
+  r = await req('GET', '/api/comercio/tarjetas/1', { token: tOperario });
+  check(
+    'GET tarjeta (lectura del operario) incluye maximoPremios',
+    r.status === 200 && r.json.maximoPremios === 3 && r.json.tarjeta.id === 1,
+    `(${r.status}, max=${r.json?.maximoPremios})`
+  );
+
+  r = await req('GET', '/api/admin/comercios/1', { token: tAdmin });
+  check('GET admin comercio expone maximoPremios', r.status === 200 && r.json.comercio.maximoPremios === 3, `(${r.status})`);
+
+  // Recorte MANUAL: 15 + 5 = 20 > 3 -> se iguala al techo silenciosamente
+  r = await mov(1, { puntosDelta: 0, premiosDelta: 5, idempotencia: 'tope-001', nombre: 'Recorte', codigoCamarero: 'C1' }, tComercio);
+  check(
+    'premios por encima del techo -> recorte silencioso a 3',
+    r.status === 201 && r.json.tarjeta.premios === 3 && r.json.maximoPremios === 3,
+    `(${r.status}, premios=${r.json?.tarjeta?.premios}, max=${r.json?.maximoPremios})`
+  );
+
+  r = await mov(1, { puntosDelta: 0, premiosDelta: 5, idempotencia: 'tope-001', nombre: 'Recorte', codigoCamarero: 'C1' }, tComercio);
+  check(
+    'reintento 200 (duplicado) también incluye maximoPremios',
+    r.status === 200 && r.json.duplicado === true && r.json.maximoPremios === 3,
+    `(${r.status}, dup=${r.json?.duplicado}, max=${r.json?.maximoPremios})`
+  );
+
+  // El admin baja el techo por debajo del saldo (3): la SIGUIENTE operación
+  // que pase por la verificación los iguala, aunque la operación reste.
+  r = await req('PATCH', '/api/admin/comercios/1', { token: tAdmin, body: { maximoPremios: 1 } });
+  check('admin baja el techo a 1 (saldo actual 3) -> 200', r.status === 200, `(${r.status})`);
+
+  r = await mov(1, { puntosDelta: 0, premiosDelta: -1, idempotencia: 'tope-002' }, tComercio);
+  check(
+    'canje con resultado aún sobre el techo -> recorte a 1',
+    r.status === 201 && r.json.tarjeta.premios === 1,
+    `(${r.status}, premios=${r.json?.tarjeta?.premios})`
+  );
+
+  // Recorte por ACUMULACIÓN DE PUNTOS: techo 4 y +100 puntos => +10 premios
+  r = await req('PATCH', '/api/admin/comercios/1', { token: tAdmin, body: { maximoPremios: 4 } });
+  check('admin sube el techo a 4 -> 200', r.status === 200, `(${r.status})`);
+
+  r = await mov(1, { puntosDelta: 100, premiosDelta: 0, idempotencia: 'tope-003' }, tComercio);
+  check(
+    'acumulación de puntos con techo -> premios recortados a 4',
+    r.status === 201 && r.json.tarjeta.premios === 4,
+    `(${r.status}, premios=${r.json?.tarjeta?.premios})`
+  );
+
+  // techo 0 = sin límite (comportamiento histórico)
+  r = await req('PATCH', '/api/admin/comercios/1', { token: tAdmin, body: { maximoPremios: 0 } });
+  check('admin deja maximoPremios = 0 (sin límite) -> 200', r.status === 200 && r.json.comercio.maximoPremios === 0, `(${r.status})`);
+
+  r = await mov(1, { puntosDelta: 0, premiosDelta: 6, idempotencia: 'tope-004', nombre: 'Sin techo', codigoCamarero: 'C1' }, tComercio);
+  check(
+    'techo 0 -> sin recorte (4 + 6 = 10)',
+    r.status === 201 && r.json.tarjeta.premios === 10,
+    `(${r.status}, premios=${r.json?.tarjeta?.premios})`
+  );
+
+  r = await req('PATCH', '/api/admin/comercios/1', { token: tAdmin, body: { maximoPremios: -2 } });
+  check(
+    'PATCH con maximoPremios negativo -> 400 VALIDATION',
+    r.status === 400 && r.json.error.code === 'VALIDATION',
+    `(${r.status})`
   );
 
   // ---------------- resumen ----------------

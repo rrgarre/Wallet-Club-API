@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const { get, query, execute } = require('./connection');
 
 const COLUMNA_SAFE =
-  'id, nombre, nombreUsuario, puntosPremio, premioDescripcion, activo, idRandomLargo, createdAt, updatedAt, ' +
+  'id, nombre, nombreUsuario, puntosPremio, premioDescripcion, maximoPremios, activo, idRandomLargo, createdAt, updatedAt, ' +
   'googleWalletClaseId, googleWalletClaseEstado, googleWalletClaseCreadaEn';
 
 /** idRandomLargo: 48 caracteres hex (difícil de adivinar, pero NO es autenticación). */
@@ -43,19 +43,20 @@ async function list() {
 }
 
 /**
- * @param {{nombre, nombreUsuario, puntosPremio, premioDescripcion, activo,
- *          passwordHash, operarioHash}} datos
+ * @param {{nombre, nombreUsuario, puntosPremio, premioDescripcion, maximoPremios,
+ *          activo, passwordHash, operarioHash}} datos
  */
 async function create(datos) {
   const idRandomLargo = generarIdRandomLargo();
   const result = await execute(
-    `INSERT INTO comercios (nombre, nombreUsuario, puntosPremio, premioDescripcion, activo, idRandomLargo, passwordHash, operarioHash)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO comercios (nombre, nombreUsuario, puntosPremio, premioDescripcion, maximoPremios, activo, idRandomLargo, passwordHash, operarioHash)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       datos.nombre,
       datos.nombreUsuario ?? null,
       datos.puntosPremio,
       datos.premioDescripcion ?? null,
+      datos.maximoPremios ?? 0,
       datos.activo ? 1 : 0,
       idRandomLargo,
       datos.passwordHash,
@@ -68,8 +69,8 @@ async function create(datos) {
 /**
  * Actualización parcial. Sólo se tocan los campos enviados.
  * @param {number} id
- * @param {{nombre?, nombreUsuario?, puntosPremio?, premioDescripcion?, activo?,
- *          passwordHash?, operarioHash?}} campos
+ * @param {{nombre?, nombreUsuario?, puntosPremio?, premioDescripcion?,
+ *          maximoPremios?, activo?, passwordHash?, operarioHash?}} campos
  */
 async function update(id, campos) {
   const sets = [];
@@ -90,6 +91,10 @@ async function update(id, campos) {
   if (campos.premioDescripcion !== undefined) {
     sets.push('premioDescripcion = ?');
     params.push(campos.premioDescripcion);
+  }
+  if (campos.maximoPremios !== undefined) {
+    sets.push('maximoPremios = ?');
+    params.push(campos.maximoPremios);
   }
   if (campos.activo !== undefined) {
     sets.push('activo = ?');

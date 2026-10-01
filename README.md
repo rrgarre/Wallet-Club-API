@@ -24,7 +24,7 @@ npm run admin -- miraadmin MiPassword123
 npm run dev     # o npm start
 
 # Comprobación funcional sin necesidad de BD (usa una BD en memoria simulada)
-npm run smoke   ->  147/147 comprobaciones OK
+npm run smoke   ->  162/162 comprobaciones OK
 ```
 
 Comprobar: `GET /health` → `{ ok: true, db: "conectada" }`
@@ -65,7 +65,7 @@ scripts/smoke.js        prueba funcional end-to-end (npm run smoke)
 | Tabla | Campos |
 |---|---|
 | `admins` | id, nombre, passwordHash, createdAt |
-| `comercios` | id, nombre, nombreUsuario, puntosPremio, premioDescripcion, activo, idRandomLargo, passwordHash, operarioHash, googleWalletClaseId, googleWalletClaseEstado, googleWalletClaseCreadaEn, createdAt, updatedAt |
+| `comercios` | id, nombre, nombreUsuario, puntosPremio, premioDescripcion, maximoPremios, activo, idRandomLargo, passwordHash, operarioHash, googleWalletClaseId, googleWalletClaseEstado, googleWalletClaseCreadaEn, createdAt, updatedAt |
 | `tarjetas` | id, comercioId, nombre, email, sistema, puntos, premios, passwordHash, activo, googleWalletObjetoId, createdAt, updatedAt |
 | `operaciones` | id, tarjetaId, comercioId, tipo, puntosDelta, premiosDelta, descripcion, nombre, codigoCamarero, idempotenciaKey, createdAt |
 
@@ -92,15 +92,15 @@ scripts/smoke.js        prueba funcional end-to-end (npm run smoke)
 ### Comercio (token `comercio` u `operario`; admin permitido; **exige `activo=true`**)
 | GET | `/comercio/perfil` | Datos del comercio (rol `comercio`/admin: `?comercioId=` o en body) |
 | GET | `/comercio/tarjetas` | Tarjetas del comercio (rol `comercio`/admin) |
-| GET | `/comercio/tarjetas/:id` | Tarjeta sólo si pertenece al comercio logueado (también rol `operario`: la escaneada) |
-| POST | `/comercio/tarjetas/:id/movimiento` | Mover puntos/premios + crear operación (también rol `operario`) |
+| GET | `/comercio/tarjetas/:id` | Tarjeta sólo si pertenece al comercio logueado (también rol `operario`: la escaneada) — incluye `maximoPremios` del comercio |
+| POST | `/comercio/tarjetas/:id/movimiento` | Mover puntos/premios + crear operación (también rol `operario`) — respuesta con `maximoPremios` y premios ya recortados al techo si procede |
 | PATCH | `/comercio/password` | Cambiar la contraseña del comercio (rol `comercio` sólo) |
 | PATCH | `/comercio/operario-password` | Cambiar la contraseña de operario (roles `comercio` y `admin`; la de comercio nunca puede ser igual a la de operario) |
 
 ### Admin (token `admin`)
 | GET | `/admin/comercios` · `/admin/comercios/:id` |
-| POST | `/admin/comercios` → genera `idRandomLargo` (exige `nombreUsuario` y `operarioPassword`) |
-| PATCH | `/admin/comercios/:id` (nombre, nombreUsuario, password, operarioPassword, puntosPremio, premioDescripcion, activo) |
+| POST | `/admin/comercios` → genera `idRandomLargo` (exige `nombreUsuario` y `operarioPassword`; opcional `maximoPremios`, 0 = sin límite) |
+| PATCH | `/admin/comercios/:id` (nombre, nombreUsuario, password, operarioPassword, puntosPremio, premioDescripcion, maximoPremios, activo) |
 | POST | `/admin/comercios/:idRandomLargo/google-wallet/clase` → alta de la **CLASE** de Google Wallet (sólo clase, no tarjetas) |
 | GET | `/admin/tarjetas?comercioId=` · `/admin/tarjetas/:id` |
 | GET | `/admin/operaciones?comercioId=&tarjetaId=&tipo=&desde=&hasta=&pagina=&tamano=` |

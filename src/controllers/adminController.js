@@ -6,8 +6,17 @@ const dbTarjetas = require('../db/tarjetas');
 const dbOperaciones = require('../db/operaciones');
 const { hashPassword, verifyPassword } = require('../utils/hash');
 const { notFound, badRequest } = require('../utils/errors');
-const { texto, positivo, idParam, nombreUsuario: vNombreUsuario } = require('../utils/validate');
+const { texto, positivo, idParam, entero, nombreUsuario: vNombreUsuario } = require('../utils/validate');
 const { env } = require('../config/env');
+
+/** maximoPremios (v1.10): entero ≥ 0; 0 = sin límite de premios. */
+function maximoPremiosValor(valor, campo = 'maximoPremios') {
+  const n = entero(valor, campo, { requerido: false, defecto: 0 });
+  if (n < 0) {
+    throw badRequest(`El campo '${campo}' no puede ser negativo (0 = sin límite)`, 'VALIDATION');
+  }
+  return n;
+}
 
 /** El nombre de usuario es único global (el login ya no lleva idRandomLargo). */
 async function exigirNombreUsuarioLibre(nombreUsuario, idExcluido = null) {
@@ -44,7 +53,7 @@ async function obtenerComercio(req, res, next) {
 /**
  * POST /api/admin/comercios
  * Body: { nombre, nombreUsuario, password, operarioPassword,
- *         puntosPremio, premioDescripcion?, activo? }
+ *         puntosPremio, premioDescripcion?, maximoPremios?, activo? }
  * Genera el idRandomLargo (identificador NO autenticante).
  * - `password` = contraseña del comercio (rol 'comercio').
  * - `operarioPassword` = contraseña de operario/camarero (rol 'operario').
@@ -70,6 +79,7 @@ async function crearComercio(req, res, next) {
         'PASSWORDS_IGUALES'
       );
     }
+    const maximoPremios = maximoPremiosValor(req.body.maximoPremios);
     const puntosPremio = positivo(req.body.puntosPremio ?? 10, 'puntosPremio');
 
     const duplicado = await dbComercios.findByNombre(nombre);
@@ -83,6 +93,7 @@ async function crearComercio(req, res, next) {
       premioDescripcion: req.body.premioDescripcion
         ? texto(req.body.premioDescripcion, 'premioDescripcion', { max: 255 })
         : null,
+      maximoPremios,
       activo: req.body.activo === undefined ? true : Boolean(req.body.activo),
       passwordHash: await hashPassword(password),
       operarioHash: await hashPassword(operarioPassword),
@@ -98,7 +109,7 @@ async function crearComercio(req, res, next) {
 /**
  * PATCH /api/admin/comercios/:id
  * Body parcial: { nombre?, nombreUsuario?, password?, operarioPassword?,
- *                 puntosPremio?, premioDescripcion?, activo? }
+ *                 puntosPremio?, premioDescripcion?, maximoPremios?, activo? }
  * Sirve también para rellenar los comercios heredados que quedaron sin
  * nombre de usuario ni contraseña de operario (NULL desde la migración).
  */
@@ -112,6 +123,7 @@ async function editarComercio(req, res, next) {
     if (req.body.nombre !== undefined) campos.nombre = texto(req.body.nombre, 'nombre', { max: 150 });
     if (req.body.nombreUsuario !== undefined) campos.nombreUsuario = vNombreUsuario(req.body.nombreUsuario);
     if (req.body.puntosPremio !== undefined) campos.puntosPremio = positivo(req.body.puntosPremio, 'puntosPremio');
+    if (req.body.maximoPremios !== undefined) campos.maximoPremios = maximoPremiosValor(req.body.maximoPremios);
     if (req.body.premioDescripcion !== undefined) {
       campos.premioDescripcion = texto(req.body.premioDescripcion, 'premioDescripcion', {
         requerido: false,

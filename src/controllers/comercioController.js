@@ -21,6 +21,7 @@ async function perfil(req, res, next) {
       nombreUsuario,
       puntosPremio,
       premioDescripcion,
+      maximoPremios,
       activo,
       idRandomLargo,
       createdAt,
@@ -35,6 +36,7 @@ async function perfil(req, res, next) {
         nombreUsuario,
         puntosPremio,
         premioDescripcion,
+        maximoPremios,
         activo,
         idRandomLargo,
         createdAt,
@@ -69,7 +71,10 @@ async function obtenerTarjeta(req, res, next) {
     if (!tarjeta || tarjeta.comercioId !== req.comercio.id) {
       throw notFound('Tarjeta no encontrada o no pertenece a este comercio', 'TARJETA_NOT_FOUND');
     }
-    res.json({ ok: true, tarjeta });
+    // v1.10: el techo de premios es del COMERCIO (no de la tarjeta), por eso
+    // va fuera del objeto `tarjeta`: el front (también el operario) puede
+    // avisar «esto llegará al techo» antes de mover.
+    res.json({ ok: true, maximoPremios: Number(req.comercio.maximoPremios) || 0, tarjeta });
   } catch (err) {
     next(err);
   }
@@ -111,6 +116,7 @@ async function movimiento(req, res, next) {
       comercioId: req.comercio.id, // dueño real de la tarjeta (del token)
       tarjetaId,
       puntosPremio: req.comercio.puntosPremio,
+      maximoPremios: req.comercio.maximoPremios, // v1.10: techo (0 = sin límite)
       puntosDelta,
       premiosDelta,
       tipo: req.body.tipo,
@@ -120,7 +126,13 @@ async function movimiento(req, res, next) {
       idempotencia,
     });
 
-    res.status(resultado.duplicado ? 200 : 201).json(resultado);
+    // v1.10: el techo viaja también en la respuesta (tanto en el 201 como
+    // en el 200 de duplicado) para que el front se actualice tras cada
+    // movimiento y pueda avisar antes de enviar.
+    res.status(resultado.duplicado ? 200 : 201).json({
+      ...resultado,
+      maximoPremios: Number(req.comercio.maximoPremios) || 0,
+    });
   } catch (err) {
     next(err);
   }

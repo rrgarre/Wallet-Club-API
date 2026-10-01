@@ -1,63 +1,59 @@
-# ⚠️ Cambios temporales pendientes de integrar (v1.9)
+# ⚠️ Cambios temporales pendientes de integrar (v1.10)
 
 > Se vacía en cada actualización: sólo queda el último cambio. Si esta
 > página está vacía, la API está al día con `API_CONTRACT.md`.
 
-## Cambiar la contraseña de operario + regla «comercio ≠ operario»
+## `maximoPremios`: techo de premios por comercio
 
-**Alcance:** endpoints de cambio de contraseña y alta/edición de comercios
-(§5.5, §5.6, §7.3, §7.4, §8). **1 endpoint nuevo → 21 en total.**
-Detalle completo en `API_CONTRACT.md` v1.9; esto es SÓLO lo que hay que
-cambiar ahora.
+**Alcance:** campo nuevo en `comercios` + regla de recorte en el
+movimiento + alta/edición de admin (§5.1, §5.4, §6.7, §7.1–§7.4).
+**Sin endpoint nuevo: siguen 21.** Detalle completo en
+`API_CONTRACT.md` v1.10; esto es SÓLO lo que hay que cambiar ahora.
 
-### 1. Endpoint nuevo: `PATCH /api/comercio/operario-password`
+### 1. Campo nuevo: `comercios.maximoPremios`
 
-Roles: **`comercio`** y **`admin`** (el `operario` → `403 FORBIDDEN_ROLE`).
+- Entero **≥ 0**. **`0` = SIN LÍMITE** (comportamiento actual intacto:
+  los 3 comercios existentes quedaron a 0 con la migración; nadie nota
+  nada hasta que el admin ponga un techo).
+- Se puede **crear** con él (`POST /api/admin/comercios`, opcional,
+  defecto 0) y **editar** (`PATCH /api/admin/comercios/:id`); negativo o
+  no entero → `400 VALIDATION`.
+- **Visible** en: `GET /api/comercio/perfil`, `GET /api/admin/comercios`
+  y `GET /api/admin/comercios/:id`.
 
-- **Rol comercio** — body:
+### 1b. `maximoPremios` también para el AVISO del front (§5.3 y §5.4)
 
-```json
-{
-  "passwordActual": "…contraseña DEL comercio…",
-  "operarioPasswordNueva": "…mínimo 8…",
-  "operarioPasswordConfirmacion": "…igual que la anterior…"
-}
-```
+Para que la pantalla de mover puntos pueda avisar «esto llegará al
+techo» (también desde el camarero / operario):
 
-  · `passwordActual` se verifica contra la contraseña **del comercio** (el
-  comercio **nunca** teclea la antigua de operario: no la conoce) →
-  `401 PASSWORD_ACTUAL_INCORRECTA`.
-  · confirmación distinta → `400 VALIDATION`.
+- **`GET /api/comercio/tarjetas/:id`** → ahora responde
+  `{ ok, maximoPremios, tarjeta }` (el techo va **fuera** de `tarjeta`:
+  es del comercio). El operario **sí** puede leer este endpoint.
+- **`POST .../movimiento`** → la respuesta (`201` **y** `200`
+  duplicado) incluye `maximoPremios` a nivel superior, junto a
+  `googleWallet`. Con `tarjeta.premios` + `maximoPremios` el front sabe
+  tras cada movimiento si habrá recorte en el siguiente.
 
-- **Rol admin** — body: `{ "operarioPasswordNueva": "…" }` + `comercioId`
-  obligatorio (query o body → si falta, `400 COMERCIO_REQUERIDO`).
+### 2. Regla de recorte en `POST /api/comercio/tarjetas/:id/movimiento`
 
-- **`200 { ok: true }`**. La contraseña de operio**r** antigua deja de valer
-  en el login **al instante** (los JWT de operario emitidos caducan solos).
-  El cliente debe ofrecer este cambio en el panel del comercio (nuevo
-  formulario: contraseña del comercio + nueva de operario ×2).
+Si el comercio tiene `maximoPremios > 0` y el **resultado final** de
+premios del movimiento (delta manual **y/o** canje automático por
+acumulación de puntos) lo supera → **premios se igualan al máximo,
+silenciosamente**, en esa misma operación:
 
-### 2. Regla nueva: la contraseña de comercio y la de operario NO pueden ser iguales
-
-Nuevo código de error **`400 PASSWORDS_IGUALES`** (mensaje: «La
-contraseña de comercio y la de operario no pueden ser iguales»).
-
-**Motivo:** el login prueba **primero** la de operario; si ambas fueran la
-misma, el comercio sólo entraría como `operario` y perdería su panel.
-
-Aplica en **todos** los caminos:
-
-| Endpoint | Cuándo |
-|---|---|
-| `PATCH /api/comercio/password` (§5.5) | `passwordNueva` == contraseña de operario guardada |
-| `PATCH /api/comercio/operario-password` (§5.6) | `operarioPasswordNueva` == contraseña de comercio guardada |
-| `POST /api/admin/comercios` (§7.3) | `password` == `operarioPassword` en el alta |
-| `PATCH /api/admin/comercios/:id` (§7.4) | la nueva `password` == operario guardado, o la nueva `operarioPassword` == comercio guardado (o las dos enviadas, entre sí) |
-
-(Comercios heredados sin operario (`operarioHash` NULL): no hay conflicto
-posible, se salta la comprobación.)
+- Sigue respondiendo **`201`**; `tarjeta.premios` de la respuesta ya
+  viene **recortado** (es autoritativo). **No hay indicador** del
+  recorte: el front avisará él (p. ej. avisando antes de enviar que el
+  movimiento llegará al techo).
+- Aplica también si la operación **resta** premios y el saldo seguía
+  por encima (p. ej. el admin bajó el techo): la **siguiente**
+  operación que pase por la verificación los iguala al máximo.
+- El libro de operaciones registra lo pedido (`premiosDelta`); el saldo
+  guardado es lo recortado (un saldo por debajo de la suma de deltas
+  puede deberse a un techo).
 
 ### 3. Sin cambios en el resto
 
-Login, matriz de permisos, movimientos y tarjetas: **sin cambios** (el
-rol `operario` sigue sin poder tocar contraseñas).
+Login, roles/permisos, registro de tarjetas, Google/Apple Wallet:
+**sin cambios**. Endpoints: **sin nuevos** (sólo 2 respuestas existentes
+añaden el campo: §5.3 y §5.4).

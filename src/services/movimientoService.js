@@ -14,6 +14,13 @@
 //   4. PREMIOS (y puntos) nunca pueden quedar en negativo.
 //   5. Operaciones "no estándar" exigen nombre + código de camarero
 //      (regla aplicada por el servidor, configurable en .env).
+//   6. (v1.10) TECHO DE PREMIOS: si el comercio define `maximoPremios > 0`
+//      y el resultado final de premios (delta manual y/o canje automático
+//      por acumulación de puntos) lo supera, se recorta SILENCIOSAMENTE
+//      al máximo en esa misma operación. `maximoPremios = 0` => sin límite
+//      (comportamiento histórico: sin techo). Si los premios ya estaban
+//      por encima (p. ej. el admin bajó el techo), la siguiente operación
+//      que pase por aquí los iguala al máximo.
 // =====================================================================
 const dbTarjetas = require('../db/tarjetas');
 const dbOperaciones = require('../db/operaciones');
@@ -112,6 +119,7 @@ function sanearTarjeta(tarjeta) {
  * @param {number} p.comercioId    Comercio dueño de la tarjeta (del token o del admin)
  * @param {number} p.tarjetaId     Tarjeta sobre la que se mueve
  * @param {number} p.puntosPremio  Umbral de canje del comercio
+ * @param {number} [p.maximoPremios] Techo de premios del comercio (0 = sin límite, v1.10)
  * @param {number} p.puntosDelta   Variación de puntos (+/-)
  * @param {number} p.premiosDelta  Variación de premios (+/-)
  * @param {string} [p.tipo]        acumulacion | canje | correccion | ajuste
@@ -126,6 +134,7 @@ async function aplicarMovimiento(p) {
     comercioId,
     tarjetaId,
     puntosPremio,
+    maximoPremios = 0,
     puntosDelta,
     premiosDelta,
     tipo,
@@ -217,6 +226,16 @@ async function aplicarMovimiento(p) {
         nuevosPuntos -= n * umbral;
         nuevosPremios += n;
         conversion = { n, umbral, puntosDescontados: n * umbral };
+      }
+
+      // --- Techo de premios (v1.10, regla 6) ----------------------------
+      // Se comprueba DESPUÉS de sumar el delta y el canje automático:
+      // si el resultado final supera maximoPremios, se recorta al máximo
+      // de forma silenciosa (0 = sin límite). El libro de operaciones
+      // registra lo pedido; el saldo guardado es el recortado.
+      const tope = Number(maximoPremios) || 0;
+      if (tope > 0 && nuevosPremios > tope) {
+        nuevosPremios = tope;
       }
 
       // Saldo + registro de la operación: mismo proceso, mismo commit.

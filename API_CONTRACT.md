@@ -1,6 +1,6 @@
 # Wallet Club API — Contrato de API
 
-> **Versión 1.9 · documento de interfaz.** Fuente de verdad para cualquier cliente
+> **Versión 1.10 · documento de interfaz.** Fuente de verdad para cualquier cliente
 > (web, móvil, panel, script). Todo lo que no esté documentado aquí **no existe**
 > y no debe asumirse. Los ejemplos de este documento son respuestas **reales**
 > capturadas del servidor en ejecución.
@@ -41,6 +41,12 @@
 > nunca pueden ser iguales** (nuevo error `400 PASSWORDS_IGUALES`; aplica
 > también a `PATCH /api/comercio/password` y al alta/edición de comercios
 > de admin: §5.5, §7.3, §7.4, §8). **21 endpoints**.*
+> *v1.10: nuevo campo **`maximoPremios`** en los comercios (entero ≥ 0;
+> **0 = sin límite**): techo de premios de sus tarjetas. Si un movimiento
+> dejara los premios por encima del techo (delta manual o acumulación de
+> puntos), se **recortan silenciosamente** al máximo en esa misma
+> operación (§5.4, §6.7, §7.3, §7.4). Alta y edición desde admin;
+> visible en perfil y listados. **Sin endpoint nuevo: siguen 21**.*
 
 ---
 
@@ -445,7 +451,9 @@ se indique otro rol. **Se exige `activo = 1` en todas**. Alcance del
   "comercio": { "id": 2, "nombre": "Café Central",
     "nombreUsuario": "cafe_central",
     "puntosPremio": 10,
-    "premioDescripcion": "Café gratis", "activo": 1,
+    "premioDescripcion": "Café gratis",
+    "maximoPremios": 0,
+    "activo": 1,
     "idRandomLargo": "5949aef4b6e7e66be2a4c04e0a723c92d618d6e3bcac6b43",
     "createdAt": "2026-09-23T06:53:26.000Z",
     "googleWalletClaseId": "3388000000023208299.5949aef4b6e7e66be2a4c04e0a723c92d618d6e3bcac6b43",
@@ -474,15 +482,31 @@ Todas las tarjetas del comercio (sin paginación, sin filtros).
 
 *(rol `comercio`, `operario` o `admin`)*
 
-Misma forma que 5.2 pero `"tarjeta": {...}`.
+Misma forma que 5.2 pero con **`maximoPremios`** (techo del comercio, v1.10)
+a nivel superior y `"tarjeta": {...}`:
+
+```json
+{ "ok": true, "maximoPremios": 3, "tarjeta": { "id": 1, "comercioId": 1, ... } }
+```
+
 Si la tarjeta no existe **o pertenece a otro comercio** → `404 TARJETA_NOT_FOUND`
 (mismo código en ambos casos: no conviene distinguirlos en la interfaz).
-Es el punto de lectura de la **tarjeta escaneada** para el operario.
+Es el punto de lectura de la **tarjeta escaneada** para el operario: con
+`maximoPremios` + `tarjeta.premios` el front (también el camarero) puede
+avisar antes de mover si la operación llegaría al techo.
 
 ### 5.4 `POST /api/comercio/tarjetas/:id/movimiento` ⭐
 
 *(rol `comercio`, `operario` o `admin` — el operario sólo puede llegar aquí
 para las tarjetas de SU comercio; mismas reglas de movimiento para ambos)*
+
+> **Techo de premios (v1.10):** si el comercio define `maximoPremios > 0`
+> y este movimiento dejara los premios por encima, se **recortan
+> silenciosamente** al máximo — lee siempre `tarjeta.premios` de la
+> respuesta (regla completa en §6.7). La respuesta incluye también
+> **`maximoPremios`** a nivel superior (en el `201` y en el `200
+> duplicado`), junto a `googleWallet`, para que el front se actualice
+> tras cada movimiento.
 
 Endpoint central: mueve puntos/premios **y** registra la operación, de forma
 atómica e idempotente.
@@ -689,6 +713,22 @@ obligatorio (query o body, como el resto de rutas de comercio del admin).
 
 6. **Los saldos son autoritativos en la respuesta**: `tarjeta.puntos` y
    `tarjeta.premios` tras el movimiento.
+7. **Techo de premios del comercio — `maximoPremios` (v1.10).** Cada
+   comercio define un `maximoPremios` (entero ≥ 0; **0 = sin límite**,
+   comportamiento histórico). Si el **resultado final** de premios del
+   movimiento (delta manual **y/o** canje automático por acumulación de
+   puntos) supera el techo, la API lo **recorta silenciosamente al
+   máximo** en esa misma operación — también si la operación resta
+   premios y el saldo seguía por encima (p. ej. el admin bajó el techo):
+   la siguiente operación que pase por la verificación los iguala.
+   - La respuesta sigue siendo `201` con **`tarjeta.premios` ya
+     recortado** (los saldos de la respuesta son autoritativos, regla 6):
+     **no hay ningún indicador del recorte**; el front puede avisar de
+     antemano cuando un movimiento llegaría al techo.
+   - El libro de operaciones registra **lo pedido** (`premiosDelta`); el
+     saldo guardado es **lo recortado**. Al reconciliar sumas, ten en
+     cuenta que un saldo por debajo de la suma de deltas puede deberse a
+     un techo.
 
 ### Idempotencia (obligatoria en la práctica)
 
@@ -722,7 +762,8 @@ hubiera cambiado levemente (si cambian los deltas → `409`).
 { "ok": true, "total": 1, "comercios": [
   { "id": 2, "nombre": "Café Central", "nombreUsuario": "cafe_central",
     "puntosPremio": 10,
-    "premioDescripcion": "Café gratis", "activo": 1,
+    "premioDescripcion": "Café gratis", "maximoPremios": 0,
+    "activo": 1,
     "idRandomLargo": "5949...", "createdAt": "...", "updatedAt": null,
     "googleWalletClaseId": "3388000000023208299.5949...",
     "googleWalletClaseEstado": "UNDER_REVIEW" } ] }
@@ -733,7 +774,7 @@ hubiera cambiado levemente (si cambian los deltas → `409`).
 
 ### 7.2 `GET /api/admin/comercios/:id` → `{ ok, comercio }` · `404 COMERCIO_NOT_FOUND`
 
-*(incluye también `nombreUsuario`, `googleWalletClaseId`,
+*(incluye también `nombreUsuario`, `maximoPremios`, `googleWalletClaseId`,
 `googleWalletClaseEstado` y `googleWalletClaseCreadaEn`)*
 
 ### 7.3 `POST /api/admin/comercios`
@@ -746,6 +787,7 @@ hubiera cambiado levemente (si cambian los deltas → `409`).
 | `operarioPassword` | string, **mínimo 8** | ✅ — v1.8 (contraseña de operario/camarero) |
 | `puntosPremio` | entero > 0 | ✗ (defecto 10) |
 | `premioDescripcion` | string | ✗ |
+| `maximoPremios` | entero **≥ 0** (0 = sin límite) — v1.10 | ✗ (defecto 0) |
 | `activo` | booleano | ✗ (defecto `true`) |
 
 `201 { ok, comercio }` con el `idRandomLargo` **recién generado** (mostrarlo/guardarlo
@@ -759,10 +801,11 @@ VALIDATION` (faltan campos, formato de usuario inválido o contraseñas
 ### 7.4 `PATCH /api/admin/comercios/:id`
 
 Actualización parcial: cualquiera de los campos de 7.3 — `password` cambia la
-contraseña del comercio, **`operarioPassword`** la de operario y
+contraseña del comercio, **`operarioPassword`** la de operario,
 **`nombreUsuario`** el usuario de login (`400 USUARIO_DUPLICADO` si lo usa
-otro comercio). Sin campos → `400 VALIDATION`. Devuelve `{ ok, comercio }` con
-`updatedAt` refrescado y **sin hashes**.
+otro comercio) y **`maximoPremios`** el techo de premios (v1.10; negativo o
+no entero → `400 VALIDATION`). Sin campos → `400 VALIDATION`. Devuelve
+`{ ok, comercio }` con `updatedAt` refrescado y **sin hashes**.
 
 - **v1.9 — `400 PASSWORDS_IGUALES`**: la nueva contraseña de comercio no
   puede coincidir con la de operario guardada (ni viceversa; y si llegan las
@@ -1005,7 +1048,7 @@ curl -s -X POST $BASE/api/auth/comercio/login \
 # Crear comercio (password = comercio; operarioPassword = camarero; NO pueden ser iguales)
 curl -s -X POST $BASE/api/admin/comercios \
   -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -d '{"nombre":"Café Central","nombreUsuario":"cafe_central","password":"...","operarioPassword":"...","puntosPremio":10,"premioDescripcion":"Café gratis"}'
+  -d '{"nombre":"Café Central","nombreUsuario":"cafe_central","password":"...","operarioPassword":"...","puntosPremio":10,"premioDescripcion":"Café gratis","maximoPremios":0}'
 
 # Cambiar la contraseña de operario (desde el comercio, con SU contraseña)
 curl -s -X PATCH $BASE/api/comercio/operario-password \
@@ -1111,6 +1154,17 @@ curl -s -X POST $BASE/api/admin/comercios/$ID_RANDOM/google-wallet/clase \
 - [ ] **v1.9**: `400 PASSWORDS_IGUALES` — la contraseña de comercio y la
       de operario nunca pueden coincidir (regla en §5.5, §5.6, §7.3 y
       §7.4): si coincidieran, el login sólo daría rol `operario`.
+- [ ] **v1.10**: `maximoPremios` (comercio, entero ≥ 0, **0 = sin
+      límite**) — en alta y `PATCH` de admin (negativo/no entero → `400
+      VALIDATION`), visible en perfil y listados. Si un movimiento deja
+      los premios por encima del techo, se **recortan silenciosamente**:
+      el front lee siempre `tarjeta.premios` de la respuesta y puede
+      avisar de antemano al camarero (no hay indicador del recorte).
+      **Para el aviso**: `maximoPremios` viene también en
+      `GET /api/comercio/tarjetas/:id` (§5.3, accessible para el
+      operario) y en la respuesta del movimiento (§5.4, `201` y `200
+      duplicado`): comparando `tarjeta.premios + delta` contra el techo
+      se sabe antes de enviar si habrá recorte.
 - [ ] El login de tarjeta incluye `googleWalletUrl`: si es `string`, se puede
       ofrecer «Guardar en Google Wallet» también desde ahí; si es `null`, no
       mostrar nada.
